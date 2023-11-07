@@ -1331,6 +1331,7 @@ def try_buy_strategyA(context, tick):
     # 2.脚本配置强制买，无视其他条件
     # 3.配置文件，单个标的涨幅
     # 4.配置文件，达到时间买入
+    # 5.配置文件，单个标的股数（BN100BN，不需要b标识）
 
     enoughMoney1Hand = leftCash > (curVal5 * 100)
     # 很奇怪，金字塔的python可以用and，但是在掘金准备就必须用&替换and，否则会报错
@@ -1640,6 +1641,7 @@ def try_sell_strategyA(context, tick):
     # 7.配置直接清仓所有--fsa标记修改，详见配置文件中的说明
     # 8.配置单个标的卖出的涨幅比例
     # 9.配置单个标的的卖出时间
+    # 10.配置单个标的卖出股数（使用方式SN100SN，不需要加s标识）
 
     sell_condition1 = float_profit_rate > context.Sell_Increase_Rate
     sell_condition2 = context.sell_with_time_limit_flag and False
@@ -1852,6 +1854,7 @@ def try_buy_strategyB(context, tick):
     # 2.脚本配置强制买，无视其他条件
     # 3.配置文件，单个标的涨幅
     # 4.配置文件，达到时间买入
+    # 5.配置文件，单个标的股数（BN100BN，不需要b标识）
 
     enoughMoney1Hand = leftCash > (curVal5 * 100)
     # 很奇怪，金字塔的python可以用and，但是在掘金准备就必须用&替换and，否则会报错
@@ -2162,6 +2165,7 @@ def try_sell_strategyB(context, tick):
     # 7.配置直接清仓所有--fsa标记修改，详见配置文件中的说明
     # 8.配置单个标的卖出的涨幅比例
     # 9.配置单个标的的卖出时间
+    # 10.配置单个标的卖出股数（使用方式SN100SN，不需要加s标识）
 
     sell_condition1 = float_profit_rate > context.Sell_Increase_Rate
     sell_condition2 = context.sell_with_time_limit_flag
@@ -2379,6 +2383,7 @@ def try_buy_strategyB1(context, tick):
     # 2.脚本配置强制买，无视其他条件
     # 3.配置文件，单个标的涨幅
     # 4.配置文件，达到时间买入
+    # 5.配置文件，单个标的股数（BN100BN，不需要b标识）
 
     enoughMoney1Hand = leftCash > (curVal5 * 100)
     # 很奇怪，金字塔的python可以用and，但是在掘金准备就必须用&替换and，否则会报错
@@ -2688,6 +2693,7 @@ def try_sell_strategyB1(context, tick):
     # 7.配置直接清仓所有--fsa标记修改，详见配置文件中的说明
     # 8.配置单个标的卖出的涨幅比例
     # 9.配置单个标的的卖出时间
+    # 10.配置单个标的卖出股数（使用方式SN100SN，不需要加s标识）
 
     sell_condition1 = float_profit_rate > context.Sell_Increase_Rate
     sell_condition2 = context.sell_with_time_limit_flag and False
