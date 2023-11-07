@@ -1345,12 +1345,13 @@ def try_buy_strategyA(context, tick):
     buyCondition2 = True if context.ids[tick.symbol].force_buy_flag else False
     buyCondition3 = (rate > context.ids[tick.symbol].buy_with_rate) if (context.ids[tick.symbol].buy_with_rate > 0) else (rate < context.ids[tick.symbol].buy_with_rate)
     buyCondition4 = (now >= target_time_for_solo)
+    buyCondition5 = (context.ids[tick.symbol].buy_with_num > 0)
 
     # 在合适的情况下输出剩余空间信息
     # if (leftCash > left_space) and (enoughMoney1Hand) and (tick.symbol == 'SZSE.300522'):
     #     print(f'{tick.symbol} 涨跌幅：{round(rate * 100.0, 3)}% 最新价格：{tick.price} 剩余空间：{left_space} leftcash：{leftCash}')  
     
-    if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4):
+    if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4 or buyCondition5):
         market_value = 0 if (not pos) else pos.amount
         print(f"---------->>>test{tick.symbol}")
         msg = f"\n-------->>开始尝试买入[{tick.symbol}:{name}]，当前持仓量:{curHolding} 市值:{round(market_value, 2)} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
@@ -1367,6 +1368,8 @@ def try_buy_strategyA(context, tick):
             msg += f"\n配置文件，单只涨幅达标买入"
         elif buyCondition4:
             msg += f"\n配置文件，到指定时间买入"
+        elif buyCondition5:
+            msg += f"\n配置文件，买入指定的股数"
 
         log(msg)
         
@@ -1449,6 +1452,8 @@ def try_buy_strategyA(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            context.ids[tick.symbol].buy_with_num = 0
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -1652,9 +1657,10 @@ def try_sell_strategyA(context, tick):
     sell_condition7 = context.force_sell_all_flag
     sell_condition8 = (float_profit_rate > context.ids[tick.symbol].sell_with_rate) if (context.ids[tick.symbol].sell_with_rate > 0) else (float_profit_rate < context.ids[tick.symbol].sell_with_rate)
     sell_condition9 = (now >= target_time_for_solo)
+    sell_condition10 = (context.ids[tick.symbol].sell_with_num > 0)
 
     # 开始判断条件，并尝试卖出
-    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9:
+    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9 or sell_condition10:
         msg = f"\n-------->>开始尝试卖出[{tick.symbol}:{name}]，当前持仓量:{curHolding} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
         msg += f"\n昨收价格:{round(pre_close, 2)} 今开价格:{round(tick.open, 2)} 瞬间价格:{round(tick.price, 2)} 成本价:{pos.vwap}"
         msg += f"\n卖出时盈亏百分比:{round(float_profit_rate * 100.0, 3)}% 是否为高预期{context.ids[tick.symbol].high_expected_flag}"
@@ -1680,6 +1686,8 @@ def try_sell_strategyA(context, tick):
             msg += "配置文件单个涨幅达标"
         elif sell_condition9:
             msg += "配置文件指定时间卖出"
+        elif sell_condition10:
+            msg += "配置文件指定股数卖出"
 
         msg += f"\n卖出使用买5价格：{curVal5}"
         log(msg)
@@ -1691,6 +1699,7 @@ def try_sell_strategyA(context, tick):
             # 只有在限价卖出时，才判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
             if context.ids[tick.symbol].sell_with_num != 0:
                 curHolding = context.ids[tick.symbol].sell_with_num
+                # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
                 context.ids[tick.symbol].sell_with_num = 0
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
@@ -1863,6 +1872,7 @@ def try_buy_strategyB(context, tick):
     buyCondition2 = True if context.ids[tick.symbol].force_buy_flag else False
     buyCondition3 = (rate > context.ids[tick.symbol].buy_with_rate) if (context.ids[tick.symbol].buy_with_rate > 0) else (rate < context.ids[tick.symbol].buy_with_rate)
     buyCondition4 = (now >= target_time_for_solo)
+    buyCondition5 = (context.ids[tick.symbol].buy_with_num > 0)
 
     # 在合适的情况下输出剩余空间信息
     if (leftCash > left_space) and (enoughMoney1Hand):
@@ -1871,7 +1881,7 @@ def try_buy_strategyB(context, tick):
     if context.test_info == 3:
         print(f"buy time cost, pt3: {time.time() - t:.4f} s")
     
-    if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4):
+    if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4 or buyCondition5):
         market_value = 0 if (not pos) else pos.amount
         print(f"---------->>>test{tick.symbol}")
         msg = f"\n-------->>开始尝试买入[{tick.symbol}:{name}]，当前持仓量:{curHolding} 市值:{round(market_value, 2)} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
@@ -1888,6 +1898,8 @@ def try_buy_strategyB(context, tick):
             msg += f"\n配置文件，单只涨幅达标买入"
         elif buyCondition4:
             msg += f"\n配置文件，到指定时间买入"
+        elif buyCondition5:
+            msg += f"\n配置文件，买入指定的股数"
 
         log(msg)
         
@@ -1970,6 +1982,8 @@ def try_buy_strategyB(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            context.ids[tick.symbol].buy_with_num = 0
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2183,15 +2197,19 @@ def try_sell_strategyB(context, tick):
     sell_condition4 = context.sell_with_total_float_profit_flag
     sell_condition5 = context.ids[tick.symbol].force_sell_flag
     sell_condition6 = context.sell_with_total_float_loss_flag
+    # 强制卖出所有，配置文件中配置fsa
     sell_condition7 = context.force_sell_all_flag
+    # 配置文件支持的SR1SR，上涨超过1%卖出，也支持负数，负数的话是止损
     sell_condition8 = (float_profit_rate > context.ids[tick.symbol].sell_with_rate) if (context.ids[tick.symbol].sell_with_rate > 0) else (float_profit_rate < context.ids[tick.symbol].sell_with_rate)
+    # 配置文件支持的限时卖出ST10:00ST
     sell_condition9 = (now >= target_time_for_solo)
+    sell_condition10 = (context.ids[tick.symbol].sell_with_num > 0)
 
     if context.test_info == 2:
         print(f"sell time cost, pt4: {time.time() - t:.4f} s")
 
     # 开始判断条件，并尝试卖出
-    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9:
+    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9 or sell_condition10:
         msg = f"\n-------->>开始尝试卖出[{tick.symbol}:{name}]，当前持仓量:{curHolding} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
         msg += f"\n昨收价格:{round(pre_close, 2)} 今开价格:{round(tick.open, 2)} 瞬间价格:{round(tick.price, 2)} 成本价:{pos.vwap}"
         msg += f"\n卖出时盈亏百分比:{round(float_profit_rate * 100.0, 3)}% 是否为高预期{context.ids[tick.symbol].high_expected_flag}"
@@ -2217,6 +2235,8 @@ def try_sell_strategyB(context, tick):
             msg += "配置文件单个涨幅达标"
         elif sell_condition9:
             msg += "配置文件指定时间卖出"
+        elif sell_condition10:
+            msg += "配置文件指定股数卖出"
 
         msg += f"\n卖出使用买5价格：{curVal5}"
         log(msg)
@@ -2228,6 +2248,7 @@ def try_sell_strategyB(context, tick):
             # 只有在限价卖出时，才判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
             if context.ids[tick.symbol].sell_with_num != 0:
                 curHolding = context.ids[tick.symbol].sell_with_num
+                # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
                 context.ids[tick.symbol].sell_with_num = 0
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
@@ -2398,12 +2419,13 @@ def try_buy_strategyB1(context, tick):
     buyCondition2 = True if context.ids[tick.symbol].force_buy_flag else False
     buyCondition3 = (rate > context.ids[tick.symbol].buy_with_rate) if (context.ids[tick.symbol].buy_with_rate > 0) else (rate < context.ids[tick.symbol].buy_with_rate)
     buyCondition4 = (now >= target_time_for_solo)
+    buyCondition5 = (context.ids[tick.symbol].buy_with_num > 0)
 
     # 在合适的情况下输出剩余空间信息
     if (leftCash > left_space) and (enoughMoney1Hand):
         print(f'{tick.symbol} 涨跌幅：{round(rate * 100.0, 3)}% 最新价格：{tick.price} 剩余空间：{left_space} leftcash：{leftCash}')  
     
-    if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4):
+    if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4 or buyCondition5):
         market_value = 0 if (not pos) else pos.amount
         print(f"---------->>>test{tick.symbol}")
         msg = f"\n-------->>开始尝试买入[{tick.symbol}:{name}]，当前持仓量:{curHolding} 市值:{round(market_value, 2)} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
@@ -2420,6 +2442,8 @@ def try_buy_strategyB1(context, tick):
             msg += f"\n配置文件，单只涨幅达标买入"
         elif buyCondition4:
             msg += f"\n配置文件，到指定时间买入"
+        elif buyCondition5:
+            msg += f"\n配置文件，买入指定的股数"
 
         log(msg)
         
@@ -2502,6 +2526,8 @@ def try_buy_strategyB1(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            context.ids[tick.symbol].buy_with_num = 0
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2704,9 +2730,10 @@ def try_sell_strategyB1(context, tick):
     sell_condition7 = context.force_sell_all_flag
     sell_condition8 = (float_profit_rate > context.ids[tick.symbol].sell_with_rate) if (context.ids[tick.symbol].sell_with_rate > 0) else (float_profit_rate < context.ids[tick.symbol].sell_with_rate)
     sell_condition9 = (now >= target_time_for_solo)
+    sell_condition10 = (context.ids[tick.symbol].sell_with_num > 0)
 
     # 开始判断条件，并尝试卖出
-    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9:
+    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9 or sell_condition10:
         msg = f"\n-------->>开始尝试卖出[{tick.symbol}:{name}]，当前持仓量:{curHolding} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
         msg += f"\n昨收价格:{round(pre_close, 2)} 今开价格:{round(tick.open, 2)} 瞬间价格:{round(tick.price, 2)} 成本价:{pos.vwap}"
         msg += f"\n卖出时盈亏百分比:{round(float_profit_rate * 100.0, 3)}% 是否为高预期{context.ids[tick.symbol].high_expected_flag}"
@@ -2732,6 +2759,8 @@ def try_sell_strategyB1(context, tick):
             msg += "配置文件单个涨幅达标"
         elif sell_condition9:
             msg += "配置文件指定时间卖出"
+        elif sell_condition10:
+            msg += "配置文件指定股数卖出"
 
         msg += f"\n卖出使用买5价格：{curVal5}"
         log(msg)
@@ -2743,6 +2772,7 @@ def try_sell_strategyB1(context, tick):
             # 只有在限价卖出时，才判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
             if context.ids[tick.symbol].sell_with_num != 0:
                 curHolding = context.ids[tick.symbol].sell_with_num
+                # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
                 context.ids[tick.symbol].sell_with_num = 0
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
