@@ -1543,6 +1543,7 @@ def try_sell_strategyA(context, tick):
     # 正确统计：通过缓存（记录）值，加上剩余没有卖出的总和才能得到正确值！！！！
     # 为了减轻计算负担，这里要判断下是否满意进入整体盈利和限时情况，有任意一个进入后就不再更新这里的市值计算了
     valid_tfpr_flag = True
+    # 下面条件取消了context.tick_count_for_sell_ok的频率控制，有可能导致计算负担的加大？下面的print加入了频率控制，观察下AA的情况，再看下一步调整
     if (not context.sell_with_total_float_profit_flag) and (not context.sell_with_time_limit_flag) and (not context.sell_with_total_float_loss_flag):
         cur_market_value = 0
         handle_count = 0 # 用来调试总盈利计算错误问题，看是否执行完毕所有的目标
@@ -1567,11 +1568,11 @@ def try_sell_strategyA(context, tick):
             print(f"Fatal error!! cur mv == 0, sell_pos_dict len:[{len(context.sell_pos_dict)}]")
             return
         # print(f"cur_mv[{cur_market_value}] total_mv[{context.total_market_value_for_all_sell}]")
-        if valid_tfpr_flag:
+        if valid_tfpr_flag and context.tick_count_for_sell_ok:
             print(f"总盈亏：{round(total_float_profit_rate * 100, 3)}%")
             context.tfpr = total_float_profit_rate
             # 检测一下异常，目前出现的非常低的百分比不知道怎么回事，需要排查下
-            if (context.tfpr <= -0.05) or (context.tfpr >= 0.07):
+            if (context.tfpr <= -0.05) or (context.tfpr >= 0.1):
                 log(f"[sell][Fatal-Error] 出现异常总盈亏数据{round(total_float_profit_rate * 100, 3)}%, total_mv[{context.total_market_value_for_all_sell}] cur_mv[{cur_market_value}] sell_pos_dict_len[{len(context.sell_pos_dict)}] handle_len[{handle_count}]")
         # 更新和检测整体的追高情况（特定情况应该放弃追高卖出）
         if context.sell_all_chase_raise_flag:
@@ -1588,13 +1589,11 @@ def try_sell_strategyA(context, tick):
                     log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
-                    context.sell_all_chase_raise_flag = False
                 elif (not context.sell_with_total_float_profit_flag) and ((total_float_profit_rate - context.sell_all_chase_highest_record) / context.sell_all_chase_highest_record < -0.12):
                     context.sell_with_total_float_profit_flag = True
                     log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
-                    context.sell_all_chase_raise_flag = False
 
         # 更新记录最大的总浮动盈亏（用于在13点35分，也就是设定的全部卖出时段进行log记录）
         # if valid_tfpr_flag and (total_float_profit_rate > context.highest_total_float_profit_info[0]):
@@ -1606,6 +1605,7 @@ def try_sell_strategyA(context, tick):
 
     # 大于整体盈利卖出条件后，直接激活卖出条件（不再重置false）
     # false只在init时有一次，后续只要激活就全部卖出（只激活一次即可）
+    # 只激活一次的策略，有可能带来了滑点严重的问题？？因为激活的瞬间，可能整体盈利还在抖动，所以导致一直有0.2%左右的差值？？所以需要改为反复激活，也就是激活后，也要保证后续的每只股卖出时都达到了整体收益？？（需要验证）
     if (not context.sell_with_total_float_profit_flag) and (valid_tfpr_flag) and (context.tfpr > context.Sell_All_Increase_Rate):
         context.sell_with_total_float_profit_flag = True
         log(f"-------->已激活整体盈利卖出条件，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
@@ -1645,6 +1645,8 @@ def try_sell_strategyA(context, tick):
     sell_condition2 = context.sell_with_time_limit_flag and False
     sell_condition3 = float_profit_rate < context.Sell_Loss_Limit
     sell_condition4 = context.sell_with_total_float_profit_flag
+    # 重置整体盈利卖出标识（必须每只股都重新计算，保证贴合卖出线）
+    context.sell_with_total_float_profit_flag = False
     sell_condition5 = context.ids[tick.symbol].force_sell_flag
     sell_condition6 = context.sell_with_total_float_loss_flag
     sell_condition7 = context.force_sell_all_flag
@@ -2062,7 +2064,8 @@ def try_sell_strategyB(context, tick):
     # 正确统计：通过缓存（记录）值，加上剩余没有卖出的总和才能得到正确值！！！！
     # 为了减轻计算负担，这里要判断下是否满意进入整体盈利和限时情况，有任意一个进入后就不再更新这里的市值计算了
     valid_tfpr_flag = True
-    if (not context.sell_with_total_float_profit_flag) and (not context.sell_with_time_limit_flag) and (not context.sell_with_total_float_loss_flag) and (context.tick_count_for_sell_ok):
+    # 下面条件取消了context.tick_count_for_sell_ok的频率控制，有可能导致计算负担的加大？下面的print加入了频率控制，观察下AA的情况，再看下一步调整
+    if (not context.sell_with_total_float_profit_flag) and (not context.sell_with_time_limit_flag) and (not context.sell_with_total_float_loss_flag):
         
         cur_market_value = 0
         handle_count = 0 # 用来调试总盈利计算错误问题，看是否执行完毕所有的目标
@@ -2087,11 +2090,11 @@ def try_sell_strategyB(context, tick):
             print(f"Fatal error!! cur mv == 0, sell_pos_dict len:[{len(context.sell_pos_dict)}]")
             return
         # print(f"cur_mv[{cur_market_value}] total_mv[{context.total_market_value_for_all_sell}]")
-        if valid_tfpr_flag:
+        if valid_tfpr_flag and context.tick_count_for_sell_ok:
             print(f"总盈亏：{round(total_float_profit_rate * 100, 3)}%")
             context.tfpr = total_float_profit_rate
             # 检测一下异常，目前出现的非常低的百分比不知道怎么回事，需要排查下
-            if (context.tfpr <= -0.05) or (context.tfpr >= 0.07):
+            if (context.tfpr <= -0.05) or (context.tfpr >= 0.1):
                 log(f"[sell][Fatal-Error] 出现异常总盈亏数据{round(total_float_profit_rate * 100, 3)}%, total_mv[{context.total_market_value_for_all_sell}] cur_mv[{cur_market_value}] sell_pos_dict_len[{len(context.sell_pos_dict)}] handle_len[{handle_count}]")
         # 更新和检测整体的追高情况（特定情况应该放弃追高卖出）
         if context.sell_all_chase_raise_flag:
@@ -2108,13 +2111,11 @@ def try_sell_strategyB(context, tick):
                     log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
-                    context.sell_all_chase_raise_flag = False
                 elif (not context.sell_with_total_float_profit_flag) and ((total_float_profit_rate - context.sell_all_chase_highest_record) / context.sell_all_chase_highest_record < -0.12):
                     context.sell_with_total_float_profit_flag = True
                     log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
-                    context.sell_all_chase_raise_flag = False
 
         # 更新记录最大的总浮动盈亏（用于在13点35分，也就是设定的全部卖出时段进行log记录）
         # if valid_tfpr_flag and (total_float_profit_rate > context.highest_total_float_profit_info[0]):
@@ -2126,6 +2127,7 @@ def try_sell_strategyB(context, tick):
 
     # 大于整体盈利卖出条件后，直接激活卖出条件（不再重置false）
     # false只在init时有一次，后续只要激活就全部卖出（只激活一次即可）
+    # 只激活一次的策略，有可能带来了滑点严重的问题？？因为激活的瞬间，可能整体盈利还在抖动，所以导致一直有0.2%左右的差值？？所以需要改为反复激活，也就是激活后，也要保证后续的每只股卖出时都达到了整体收益？？（需要验证）
     if (not context.sell_with_total_float_profit_flag) and (valid_tfpr_flag) and (context.tfpr > context.Sell_All_Increase_Rate):
         context.sell_with_total_float_profit_flag = True
         log(f"-------->已激活整体盈利卖出条件，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
@@ -2165,6 +2167,8 @@ def try_sell_strategyB(context, tick):
     sell_condition2 = context.sell_with_time_limit_flag
     sell_condition3 = float_profit_rate < context.Sell_Loss_Limit
     sell_condition4 = context.sell_with_total_float_profit_flag
+    # 重置整体盈利卖出标识（必须每只股都重新计算，保证贴合卖出线）
+    context.sell_with_total_float_profit_flag = False
     sell_condition5 = context.ids[tick.symbol].force_sell_flag
     sell_condition6 = context.sell_with_total_float_loss_flag
     # 强制卖出所有，配置文件中配置fsa
@@ -2587,6 +2591,7 @@ def try_sell_strategyB1(context, tick):
     # 正确统计：通过缓存（记录）值，加上剩余没有卖出的总和才能得到正确值！！！！
     # 为了减轻计算负担，这里要判断下是否满意进入整体盈利和限时情况，有任意一个进入后就不再更新这里的市值计算了
     valid_tfpr_flag = True
+    # 下面条件取消了context.tick_count_for_sell_ok的频率控制，有可能导致计算负担的加大？下面的print加入了频率控制，观察下AA的情况，再看下一步调整
     if (not context.sell_with_total_float_profit_flag) and (not context.sell_with_time_limit_flag) and (not context.sell_with_total_float_loss_flag):
         cur_market_value = 0
         handle_count = 0 # 用来调试总盈利计算错误问题，看是否执行完毕所有的目标
@@ -2611,11 +2616,11 @@ def try_sell_strategyB1(context, tick):
             print(f"Fatal error!! cur mv == 0, sell_pos_dict len:[{len(context.sell_pos_dict)}]")
             return
         # print(f"cur_mv[{cur_market_value}] total_mv[{context.total_market_value_for_all_sell}]")
-        if valid_tfpr_flag:
+        if valid_tfpr_flag and context.tick_count_for_sell_ok:
             print(f"总盈亏：{round(total_float_profit_rate * 100, 3)}%")
             context.tfpr = total_float_profit_rate
             # 检测一下异常，目前出现的非常低的百分比不知道怎么回事，需要排查下
-            if (context.tfpr <= -0.05) or (context.tfpr >= 0.07):
+            if (context.tfpr <= -0.05) or (context.tfpr >= 0.1):
                 log(f"[sell][Fatal-Error] 出现异常总盈亏数据{round(total_float_profit_rate * 100, 3)}%, total_mv[{context.total_market_value_for_all_sell}] cur_mv[{cur_market_value}] sell_pos_dict_len[{len(context.sell_pos_dict)}] handle_len[{handle_count}]")
         # 更新和检测整体的追高情况（特定情况应该放弃追高卖出）
         if context.sell_all_chase_raise_flag:
@@ -2632,13 +2637,11 @@ def try_sell_strategyB1(context, tick):
                     log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
-                    context.sell_all_chase_raise_flag = False
                 elif (not context.sell_with_total_float_profit_flag) and ((total_float_profit_rate - context.sell_all_chase_highest_record) / context.sell_all_chase_highest_record < -0.12):
                     context.sell_with_total_float_profit_flag = True
                     log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
-                    context.sell_all_chase_raise_flag = False
 
         # 更新记录最大的总浮动盈亏（用于在13点35分，也就是设定的全部卖出时段进行log记录）
         # if valid_tfpr_flag and (total_float_profit_rate > context.highest_total_float_profit_info[0]):
@@ -2650,6 +2653,7 @@ def try_sell_strategyB1(context, tick):
 
     # 大于整体盈利卖出条件后，直接激活卖出条件（不再重置false）
     # false只在init时有一次，后续只要激活就全部卖出（只激活一次即可）
+    # 只激活一次的策略，有可能带来了滑点严重的问题？？因为激活的瞬间，可能整体盈利还在抖动，所以导致一直有0.2%左右的差值？？所以需要改为反复激活，也就是激活后，也要保证后续的每只股卖出时都达到了整体收益？？（需要验证）
     if (not context.sell_with_total_float_profit_flag) and (valid_tfpr_flag) and (context.tfpr > context.Sell_All_Increase_Rate):
         context.sell_with_total_float_profit_flag = True
         log(f"-------->已激活整体盈利卖出条件，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
@@ -2689,6 +2693,8 @@ def try_sell_strategyB1(context, tick):
     sell_condition2 = context.sell_with_time_limit_flag and False
     sell_condition3 = float_profit_rate < context.Sell_Loss_Limit
     sell_condition4 = context.sell_with_total_float_profit_flag
+    # 重置整体盈利卖出标识（必须每只股都重新计算，保证贴合卖出线）
+    context.sell_with_total_float_profit_flag = False
     sell_condition5 = context.ids[tick.symbol].force_sell_flag
     sell_condition6 = context.sell_with_total_float_loss_flag
     sell_condition7 = context.force_sell_all_flag
@@ -2854,6 +2860,7 @@ def info_statistics(context, tick):
         # 在更新低值的时候，我们可以处理行情很好或者很不好时的特殊处理（测试）
         # 非常不好的情况，求保本，向坐标轴左侧包含
         if total_float_profit_rate < -0.01:
+            context.sell_all_chase_raise_flag = False
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.002
             elif context.strategy_info.BA == 1:
@@ -2862,28 +2869,25 @@ def info_statistics(context, tick):
                 context.Sell_All_Increase_Rate = 0.002
         # 非常好的情况，求高收益，向坐标轴右侧包含（注意下面也是右侧包含，所以要小心else的先后顺序）
         elif total_float_profit_rate > 0.003:
+            context.sell_all_chase_raise_flag = True
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.01
-                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.01
-                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.AA == 1:
                 context.Sell_All_Increase_Rate = 0.01
-                context.sell_all_chase_raise_flag = True
         # 比较好的情况，求高收益，向坐标轴右侧包含
         elif total_float_profit_rate > -0.0015:
+            context.sell_all_chase_raise_flag = True
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.0075
-                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0075
-                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.AA == 1:
                 context.Sell_All_Increase_Rate = 0.0075
-                context.sell_all_chase_raise_flag = True
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
+            context.sell_all_chase_raise_flag = False
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.0066
             elif context.strategy_info.BA == 1:
