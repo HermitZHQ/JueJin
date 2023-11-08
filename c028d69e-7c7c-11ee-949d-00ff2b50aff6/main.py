@@ -78,7 +78,7 @@ class LoadedIDsInfo:
         self.buy_with_rate = 1
         self.buy_with_time = "15:51"
         self.buy_with_price = 0
-        self.buy_with_num = 0
+        self.buy_with_num = 0 # 设定买入股数（增对单次刷新有效，再次刷新的话，会再次买入，需要注意）
         self.sell_with_rate = 1
         self.sell_with_time = "15:51"
         self.sell_with_price = 0
@@ -1259,13 +1259,10 @@ def try_buy_strategyA(context, tick):
     left_space = avgBuyAmount - (vwap * curHolding)
     if ((left_space >= 0) and (left_space / (tick.price * 100.0) < 0.1)) or (left_space < 0):
         buy_enough_flag = True
-    if (curHolding > 0) and (buy_enough_flag):
+    if (curHolding > 0) and (buy_enough_flag) and (context.ids[tick.symbol].buy_with_num == 0):
         return
     # 强制买入所有，持仓达标情况下，不进行任何补买动作
     elif (context.strategy_info.buy_mode.buy_all_force == 1) and ((curHolding / 100) == context.ids_buy_target_info_dict[tick.symbol].fixed_buy_in_base_num):
-        return
-    # 设置了买入量的情况下，买够就不再买了
-    if (context.ids[tick.symbol].buy_with_num != 0) and (curHolding >= context.ids[tick.symbol].buy_with_num):
         return
     
     # 基础条件：
@@ -1696,12 +1693,12 @@ def try_sell_strategyA(context, tick):
         # 卖出！！！！！！！！
         # 如果设置了脚本的指定卖出价格，则以指定的价格为准
         list_order = []
+        # 判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
+        if context.ids[tick.symbol].sell_with_num != 0:
+            curHolding = context.ids[tick.symbol].sell_with_num
+            # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
+            context.ids[tick.symbol].sell_with_num = 0
         if context.ids[tick.symbol].sell_with_price != 0:
-            # 只有在限价卖出时，才判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
-            if context.ids[tick.symbol].sell_with_num != 0:
-                curHolding = context.ids[tick.symbol].sell_with_num
-                # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
-                context.ids[tick.symbol].sell_with_num = 0
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=context.order_type_sell, position_effect=PositionEffect_Close, price=curVal5)
@@ -1781,13 +1778,10 @@ def try_buy_strategyB(context, tick):
     left_space = avgBuyAmount - (vwap * curHolding)
     if ((left_space >= 0) and (left_space / (tick.price * 100.0) < 0.1)) or (left_space < 0):
         buy_enough_flag = True
-    if (curHolding > 0) and (buy_enough_flag):
+    if (curHolding > 0) and (buy_enough_flag) and (context.ids[tick.symbol].buy_with_num == 0):
         return
     # 强制买入所有，持仓达标情况下，不进行任何补买动作
     elif (context.strategy_info.buy_mode.buy_all_force == 1) and ((curHolding / 100) == context.ids_buy_target_info_dict[tick.symbol].fixed_buy_in_base_num):
-        return
-    # 设置了买入量的情况下，买够就不再买了
-    if (context.ids[tick.symbol].buy_with_num != 0) and (curHolding >= context.ids[tick.symbol].buy_with_num):
         return
     
     # 基础条件：
@@ -2222,12 +2216,12 @@ def try_sell_strategyB(context, tick):
         # 卖出！！！！！！！！
         # 如果设置了脚本的指定卖出价格，则以指定的价格为准
         list_order = []
+        # 判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
+        if context.ids[tick.symbol].sell_with_num != 0:
+            curHolding = context.ids[tick.symbol].sell_with_num
+            # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
+            context.ids[tick.symbol].sell_with_num = 0
         if context.ids[tick.symbol].sell_with_price != 0:
-            # 只有在限价卖出时，才判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
-            if context.ids[tick.symbol].sell_with_num != 0:
-                curHolding = context.ids[tick.symbol].sell_with_num
-                # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
-                context.ids[tick.symbol].sell_with_num = 0
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=context.order_type_sell, position_effect=PositionEffect_Close, price=curVal5)
@@ -2310,13 +2304,10 @@ def try_buy_strategyB1(context, tick):
     left_space = avgBuyAmount - (vwap * curHolding)
     if ((left_space >= 0) and (left_space / (tick.price * 100.0) < 0.1)) or (left_space < 0):
         buy_enough_flag = True
-    if (curHolding > 0) and (buy_enough_flag):
+    if (curHolding > 0) and (buy_enough_flag) and (context.ids[tick.symbol].buy_with_num == 0):
         return
     # 强制买入所有，持仓达标情况下，不进行任何补买动作
     elif (context.strategy_info.buy_mode.buy_all_force == 1) and ((curHolding / 100) == context.ids_buy_target_info_dict[tick.symbol].fixed_buy_in_base_num):
-        return
-    # 设置了买入量的情况下，买够就不再买了
-    if (context.ids[tick.symbol].buy_with_num != 0) and (curHolding >= context.ids[tick.symbol].buy_with_num):
         return
     
     # 基础条件：
@@ -2747,12 +2738,12 @@ def try_sell_strategyB1(context, tick):
         # 卖出！！！！！！！！
         # 如果设置了脚本的指定卖出价格，则以指定的价格为准
         list_order = []
+        # 判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
+        if context.ids[tick.symbol].sell_with_num != 0:
+            curHolding = context.ids[tick.symbol].sell_with_num
+            # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
+            context.ids[tick.symbol].sell_with_num = 0
         if context.ids[tick.symbol].sell_with_price != 0:
-            # 只有在限价卖出时，才判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
-            if context.ids[tick.symbol].sell_with_num != 0:
-                curHolding = context.ids[tick.symbol].sell_with_num
-                # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
-                context.ids[tick.symbol].sell_with_num = 0
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=context.order_type_sell, position_effect=PositionEffect_Close, price=curVal5)
