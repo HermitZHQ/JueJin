@@ -1737,6 +1737,7 @@ def try_buy_strategyB(context, tick):
     # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
     #print(f"买卖信息：{tick.quotes[0]['bid_p']} {tick.quotes[1]['bid_p']} {tick.quotes[2]['bid_p']} {tick.quotes[3]['bid_p']} {tick.quotes[4]['bid_p']}---- cur val{tick.price}")
     buy_in_down_rate = context.Buy_In_Fall_Rate
+    buy_in_up_rate = context.Buy_In_Up_Rate
     useClose = (context.Use_Close == 1)
     # 这里和策略A不一样，数量是动态的
     totalBuyNum = context.buy_num
