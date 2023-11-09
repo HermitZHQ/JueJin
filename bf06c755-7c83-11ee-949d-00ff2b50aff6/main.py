@@ -78,7 +78,9 @@ class LoadedIDsInfo:
         self.buy_with_rate = 1
         self.buy_with_time = "15:51"
         self.buy_with_price = 0
-        self.buy_with_num = 0 # 买入股数，有总量上限的限制，比如设定的200，买到200后，再次刷新也不会再买入200了
+        self.buy_with_num = 0 # 设定的单次买入股数，买入后，再次刷新的话会再次买入指定数量，需要注意
+        self.buy_with_num_need_handle = False # 是否需要处理买入股数（设定数量大于0时，把标记激活）
+        self.buy_with_num_handled_flag = False # 是否已经处理完毕（已经调用了买入接口，把标记激活，用于后续逻辑判断）
         self.sell_with_rate = 1
         self.sell_with_time = "15:51"
         self.sell_with_price = 0
@@ -428,6 +430,11 @@ def load_ids(context):
                 context.ids[str_tmp].buy_with_time = buy_with_time
                 context.ids[str_tmp].buy_with_price = buy_with_price
                 context.ids[str_tmp].buy_with_num = buy_with_num
+                if buy_with_num > 0:
+                    context.ids[str_tmp].buy_with_num_need_handle = True
+                    context.ids[str_tmp].buy_with_num_handled_flag = False
+                else:
+                    context.ids[str_tmp].buy_with_num_need_handle = False
                 context.ids[str_tmp].sell_with_rate = sell_with_rate
                 context.ids[str_tmp].sell_with_time = sell_with_time
                 context.ids[str_tmp].sell_with_price = sell_with_price
@@ -449,6 +456,11 @@ def load_ids(context):
                 context.ids[str_tmp].buy_with_time = buy_with_time
                 context.ids[str_tmp].buy_with_price = buy_with_price
                 context.ids[str_tmp].buy_with_num = buy_with_num
+                if buy_with_num > 0:
+                    context.ids[str_tmp].buy_with_num_need_handle = True
+                    context.ids[str_tmp].buy_with_num_handled_flag = False
+                else:
+                    context.ids[str_tmp].buy_with_num_need_handle = False
                 context.ids[str_tmp].sell_with_rate = sell_with_rate
                 context.ids[str_tmp].sell_with_time = sell_with_time
                 context.ids[str_tmp].sell_with_price = sell_with_price
@@ -1233,6 +1245,10 @@ def try_buy_strategyA(context, tick):
     if (tick.price == 0):
         return
     
+    # 检测设定买入股数的情况下，是否已经处理完毕需要返回（一般这种情况都是小股数，但是可能存在被撤单失败的情况，如果出现，则需要去check_unfinished_order函数调整条件）
+    if (context.ids[tick.symbol].buy_with_num_need_handle) and (context.ids[tick.symbol].buy_with_num_handled_flag):
+        return
+    
     leftCash = context.account().cash['available'] # 余额
     leftCash = float('%.2f' % leftCash)
     totalCash = context.account().cash['nav'] # 总资金
@@ -1452,6 +1468,7 @@ def try_buy_strategyA(context, tick):
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
             # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
             context.ids[tick.symbol].buy_with_num = 0
+            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -1591,12 +1608,12 @@ def try_sell_strategyA(context, tick):
                 # 2. 从一个较高的值，比如0.99%回撤到了0.84，回撤超过15%也卖出，说明冲力不行
                 if (not context.sell_with_total_float_profit_flag) and (total_float_profit_rate < context.sell_all_lower_limit):
                     context.sell_with_total_float_profit_flag = True
-                    log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
+                    log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，设置的底线为：{context.sell_all_lower_limit}，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
                 elif (not context.sell_with_total_float_profit_flag) and ((total_float_profit_rate - context.sell_all_chase_highest_record) / context.sell_all_chase_highest_record < -0.12):
                     context.sell_with_total_float_profit_flag = True
-                    log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
+                    log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，记录的最高值为：{round(context.sell_all_chase_highest_record, 3)}，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
 
@@ -1698,7 +1715,7 @@ def try_sell_strategyA(context, tick):
         list_order = []
         # 判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
         if context.ids[tick.symbol].sell_with_num != 0:
-            curHolding = context.ids[tick.symbol].sell_with_num
+            curHolding = int(context.ids[tick.symbol].sell_with_num)
             # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
             context.ids[tick.symbol].sell_with_num = 0
         if context.ids[tick.symbol].sell_with_price != 0:
@@ -1754,9 +1771,10 @@ def try_buy_strategyB(context, tick):
     # 跳过集合竞价的不正常价格区间
     if (tick.price == 0):
         return
-
-    if context.test_info == 3:
-        print(f"buy time cost, pt1: {time.time() - t:.4f} s")
+    
+    # 检测设定买入股数的情况下，是否已经处理完毕需要返回（一般这种情况都是小股数，但是可能存在被撤单失败的情况，如果出现，则需要去check_unfinished_order函数调整条件）
+    if (context.ids[tick.symbol].buy_with_num_need_handle) and (context.ids[tick.symbol].buy_with_num_handled_flag):
+        return
     
     leftCash = context.account().cash['available'] # 余额
     leftCash = float('%.2f' % leftCash)
@@ -1983,6 +2001,7 @@ def try_buy_strategyB(context, tick):
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
             # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
             context.ids[tick.symbol].buy_with_num = 0
+            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2132,12 +2151,12 @@ def try_sell_strategyB(context, tick):
                 # 2. 从一个较高的值，比如0.99%回撤到了0.84，回撤超过15%也卖出，说明冲力不行
                 if (not context.sell_with_total_float_profit_flag) and (total_float_profit_rate < context.sell_all_lower_limit):
                     context.sell_with_total_float_profit_flag = True
-                    log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
+                    log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，设置的底线为：{context.sell_all_lower_limit}，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
                 elif (not context.sell_with_total_float_profit_flag) and ((total_float_profit_rate - context.sell_all_chase_highest_record) / context.sell_all_chase_highest_record < -0.12):
                     context.sell_with_total_float_profit_flag = True
-                    log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
+                    log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，记录的最高值为：{round(context.sell_all_chase_highest_record, 3)}，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
 
@@ -2248,7 +2267,7 @@ def try_sell_strategyB(context, tick):
         list_order = []
         # 判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
         if context.ids[tick.symbol].sell_with_num != 0:
-            curHolding = context.ids[tick.symbol].sell_with_num
+            curHolding = int(context.ids[tick.symbol].sell_with_num)
             # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
             context.ids[tick.symbol].sell_with_num = 0
         if context.ids[tick.symbol].sell_with_price != 0:
@@ -2307,6 +2326,10 @@ def try_buy_strategyB1(context, tick):
 
     # 跳过集合竞价的不正常价格区间
     if (tick.price == 0):
+        return
+    
+    # 检测设定买入股数的情况下，是否已经处理完毕需要返回（一般这种情况都是小股数，但是可能存在被撤单失败的情况，如果出现，则需要去check_unfinished_order函数调整条件）
+    if (context.ids[tick.symbol].buy_with_num_need_handle) and (context.ids[tick.symbol].buy_with_num_handled_flag):
         return
     
     leftCash = context.account().cash['available'] # 余额
@@ -2528,6 +2551,7 @@ def try_buy_strategyB1(context, tick):
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
             # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
             context.ids[tick.symbol].buy_with_num = 0
+            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2666,12 +2690,12 @@ def try_sell_strategyB1(context, tick):
                 # 2. 从一个较高的值，比如0.99%回撤到了0.84，回撤超过15%也卖出，说明冲力不行
                 if (not context.sell_with_total_float_profit_flag) and (total_float_profit_rate < context.sell_all_lower_limit):
                     context.sell_with_total_float_profit_flag = True
-                    log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
+                    log(f"-------->已激活整体盈利卖出条件(追高回落超过底线)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，设置的底线为：{context.sell_all_lower_limit}，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
                 elif (not context.sell_with_total_float_profit_flag) and ((total_float_profit_rate - context.sell_all_chase_highest_record) / context.sell_all_chase_highest_record < -0.12):
                     context.sell_with_total_float_profit_flag = True
-                    log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
+                    log(f"-------->已激活整体盈利卖出条件(追高回落超过12%)，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，记录的最高值为：{round(context.sell_all_chase_highest_record, 3)}，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
                     context.record_sell_time = context.now
                     context.record_sell_tfpr = context.tfpr
 
@@ -2773,7 +2797,7 @@ def try_sell_strategyB1(context, tick):
         list_order = []
         # 判断是否有指定卖出数量，且挂单后，重置数量到0，避免反复卖出指定数量
         if context.ids[tick.symbol].sell_with_num != 0:
-            curHolding = context.ids[tick.symbol].sell_with_num
+            curHolding = int(context.ids[tick.symbol].sell_with_num)
             # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
             context.ids[tick.symbol].sell_with_num = 0
         if context.ids[tick.symbol].sell_with_price != 0:
@@ -2893,40 +2917,49 @@ def info_statistics(context, tick):
         # 在更新低值的时候，我们可以处理行情很好或者很不好时的特殊处理（测试）
         # 非常不好的情况，求保本，向坐标轴左侧包含
         if total_float_profit_rate < -0.01:
-            context.sell_all_chase_raise_flag = False
+            # [Warning]内部的sell_all_chase_raise_flag不要提取到上层，否则会让一些不需要追高的策略开始追高逻辑的处理（之前改过出现了bug）
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.002
+                context.sell_all_chase_raise_flag = False
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.002
+                context.sell_all_chase_raise_flag = False
             elif context.strategy_info.AA == 1:
                 context.Sell_All_Increase_Rate = 0.002
+                context.sell_all_chase_raise_flag = False
         # 非常好的情况，求高收益，向坐标轴右侧包含（注意下面也是右侧包含，所以要小心else的先后顺序）
         elif total_float_profit_rate > 0.003:
-            context.sell_all_chase_raise_flag = True
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.01
+                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.01
+                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.AA == 1:
                 context.Sell_All_Increase_Rate = 0.01
+                context.sell_all_chase_raise_flag = True
         # 比较好的情况，求高收益，向坐标轴右侧包含
         elif total_float_profit_rate > -0.0015:
-            context.sell_all_chase_raise_flag = True
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.0075
+                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0075
+                context.sell_all_chase_raise_flag = True
             elif context.strategy_info.AA == 1:
                 context.Sell_All_Increase_Rate = 0.0075
+                context.sell_all_chase_raise_flag = True
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
-            context.sell_all_chase_raise_flag = False
             if context.strategy_info.B == 1:
                 context.Sell_All_Increase_Rate = 0.0066
+                context.sell_all_chase_raise_flag = False
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0066
+                context.sell_all_chase_raise_flag = False
             elif context.strategy_info.AA == 1:
                 context.Sell_All_Increase_Rate = 0.0066
+                context.sell_all_chase_raise_flag = False
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
     target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
@@ -3011,7 +3044,7 @@ def on_tick(context, tick):
     t = time.time()
 
     if context.ids[tick.symbol].buy_flag == 1:
-        if tick.price > 0:
+        if (tick.price > 0) and (tick.symbol in context.ids_buy_target_info_dict.keys()):
             context.ids_buy_target_info_dict[tick.symbol].price = tick.price
             context.ids_buy_target_info_dict[tick.symbol].first_record_flag = True
         # else:
