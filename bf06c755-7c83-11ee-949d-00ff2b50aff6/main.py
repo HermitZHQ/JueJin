@@ -1222,7 +1222,7 @@ def try_buy_strategyA(context, tick):
 
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
-        log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
     # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
@@ -1752,7 +1752,7 @@ def try_buy_strategyB(context, tick):
 
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
-        log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
     # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
@@ -2305,7 +2305,7 @@ def try_buy_strategyB1(context, tick):
 
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
-        log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
     # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
