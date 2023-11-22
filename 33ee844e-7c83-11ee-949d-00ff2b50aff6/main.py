@@ -59,6 +59,7 @@ class StrategyInfo:
         self.B1 = 0
         self.BA = 1
         self.C = 0
+        self.M = 0
 
         self.buy_mode = BuyMode()
         self.order_type_buy = OrderTypeBuy()
