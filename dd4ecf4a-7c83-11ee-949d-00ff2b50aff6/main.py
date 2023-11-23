@@ -165,6 +165,7 @@ def refresh(context):
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
+    t = time.time()
     buy_num = 0
     handled_num = 0 # 用于计算初始化进度
     context.ids_buy = []
