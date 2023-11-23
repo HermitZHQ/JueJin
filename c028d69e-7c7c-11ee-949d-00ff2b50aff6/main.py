@@ -166,6 +166,7 @@ def refresh(context):
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
     buy_num = 0
+    handled_num = 0 # 用于计算初始化进度
     context.ids_buy = []
     context.ids_sell = []
     for k, v in context.ids.items():
@@ -203,6 +204,9 @@ def refresh(context):
                 context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
+        handled_num += 1
+        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -864,7 +868,9 @@ def init(context):
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
+    t = time.time()
     buy_num = 0
+    handled_num = 0 # 用于显示处理进度
     context.ids_buy = []
     context.ids_sell = []
     for k, v in context.ids.items():
@@ -900,6 +906,9 @@ def init(context):
             context.ids_sell.append(k)
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
+        handled_num += 1
+        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
