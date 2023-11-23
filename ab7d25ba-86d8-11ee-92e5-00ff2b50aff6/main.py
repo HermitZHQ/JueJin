@@ -227,8 +227,8 @@ def refresh(context):
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        # print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
+    # print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -828,7 +828,7 @@ def init(context):
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
         print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+    print(f"初始化总计耗时:[{time.time() - t}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
