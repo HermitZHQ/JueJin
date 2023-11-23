@@ -27,7 +27,7 @@ buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
 order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
-sell_all_time = "13:35"
+sell_all_time = "15:35"
 
 class BuyMode:
     def __init__(self):
