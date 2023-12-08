@@ -636,6 +636,7 @@ def init(context):
     context.record_sell_tfpr = 0
     add_parameter(key='test_info', value=context.test_info, min=-1, max=1, name='TestInfo', intro='', group='3', readonly=False)
     #print(f'{context.now.strftime("%H:%M:%S")}')
+    context.record_time = 0 # 用于记录时间差，基本用法就是初始化 = time.time()，然后计算时间差用time.time() - 上次记录的时间，可以在下面搜索用法
     context.tick_count_for_statistics = 0 # 记录经过的tick次数，有些函数不需要每次tick都调用，会造成性能损耗，用这个变量进行控制
     context.tick_count_for_sell = 0 # 用于控制sell函数中一些消耗较大的代码块的运行频率
     context.tick_count_limit_rate_for_sell = 0.2 # 具体的控制百分比（针对context.ids的长度），比如有1000标的，那么0.2就是20%，200只标的经过后，再运行一次
@@ -795,6 +796,7 @@ def init(context):
     context.ids_sell = []
     for k, v in context.ids.items():
         if (v.buy_flag == 1):
+            print(f"start get info of [{k}]")
             context.ids_buy_target_info_dict[k] = TargetInfo()
 
             # 在初始化的时候就直接获取各项缓存值（反正后面也会获取，而且这里获取，会更集中）
@@ -827,7 +829,7 @@ def init(context):
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
+        print(f"初始化数据进度：[{k}] [{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
     print(f"初始化总计耗时:[{time.time() - t}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
@@ -1157,6 +1159,10 @@ def monitor_A1(context, tick):
     # # 保存工作簿
     # workbook.save("c:/users/administrator/desktop/example.xlsx")
     
+    t = 0
+    if context.test_info == 2:
+        t = time.time()
+    
     curVal = context.ids_buy_target_info_dict[tick.symbol].price
     # 如果price不正常的话，则跳过对该标的的监控即可
     if curVal <= 0:
@@ -1180,35 +1186,47 @@ def monitor_A1(context, tick):
     # 掘金里的涨跌幅是需要自己手动计算的
     rate = (curVal - pre_close) / pre_close
     
-    # 超过3%就进行记录（只记录一次）
-    if (rate >= 0.03) and (tick.symbol not in context.ids_a1_info_dict.keys()):
+    if context.test_info == 2:
+        print(f"monitor phase 1 cost time:[{time.time() - t:.4f} s]")
+    
+    # 这里需要先初始化，而不是等到3%触发再初始化（会导致记录不到完整的最高和最低值）
+    if (tick.symbol not in context.ids_a1_info_dict.keys()):
         context.ids_a1_info_dict[tick.symbol] = MonitorA1Info()
+        
+    # 超过3%就进行记录（只记录一次）
+    if (rate >= 0.03) and (context.ids_a1_info_dict[tick.symbol].over_3_time == 0):
         context.ids_a1_info_dict[tick.symbol].over_3_time = context.now
         # 直接按顺序推入到记录的array里面，这样直接最后就是排序好的，不需要再次整理dict或者arr
         context.ids_a1_time_sorted_arr.append(tick.symbol)
         print(f"发现突破3%的标的[{tick.symbol}]")
         
-    # 更新超过3%被记录dict中的最高和最低值
-    if tick.symbol in context.ids_a1_info_dict.keys():
-        if (rate > context.ids_a1_info_dict[tick.symbol].highest_rate):
-            context.ids_a1_info_dict[tick.symbol].highest_rate = rate
-            context.ids_a1_info_dict[tick.symbol].highest_rate_time = context.now
-            print(f"正在更新[{tick.symbol}]高值到[{round(rate * 100, 3)}%]")
-        elif (rate < context.ids_a1_info_dict[tick.symbol].lowest_rate):
-            context.ids_a1_info_dict[tick.symbol].lowest_rate = rate
-            context.ids_a1_info_dict[tick.symbol].lowest_rate_time = context.now
-            print(f"正在更新[{tick.symbol}]低值到[{round(rate * 100, 3)}%]")
+    # 更新超过3%被记录dict中的最高和最低值（这里是错误的逻辑，不能再超过3%后再记录最高最低，这样的话，拿不到全天的最高和最低）
+    if (rate > context.ids_a1_info_dict[tick.symbol].highest_rate):
+        context.ids_a1_info_dict[tick.symbol].highest_rate = rate
+        context.ids_a1_info_dict[tick.symbol].highest_rate_time = context.now
+        print(f"正在更新[{tick.symbol}]高值到[{round(rate * 100, 2)}%]")
+    # 更新最低值不能写成elif，这个错误犯了超过2次了，这里备注一下，最高和最低需要同时统计，否则一直在涨的话，记录的最低值就是有bug的（比如从0%到9%一直涨，我们都记录不了最低值，其实最低应该是0%，但是最后可能就记录到8.9%这样的数据）
+    if (rate < context.ids_a1_info_dict[tick.symbol].lowest_rate):
+        context.ids_a1_info_dict[tick.symbol].lowest_rate = rate
+        context.ids_a1_info_dict[tick.symbol].lowest_rate_time = context.now
+        print(f"正在更新[{tick.symbol}]低值到[{round(rate * 100, 2)}%]")
         
-    reach_1530 = reach_time(context, "15:30") # 这里改成10点30先进行测试，测试完毕后，最终改到15点30
+    if context.test_info == 2:
+        print(f"monitor phase 2 cost time:[{time.time() - t:.4f} s]")
+        
+    reach_1530 = reach_time(context, "15:03")
     # 到达15点30后，开始统计并输出今天的结果，生成excel文件，只输出一次
     if ((not context.ids_a1_excel_generated_flag) and (reach_1530)) or (context.ids_a1_manual_generate_excel_flag):
-        # 转换标识，只输出一次文件
-        context.ids_a1_excel_generated_flag = True
+        # 转换标识，只自动输出一次文件，且非手动激活的情况下
+        if (not context.ids_a1_manual_generate_excel_flag):
+            context.ids_a1_excel_generated_flag = True
         context.ids_a1_manual_generate_excel_flag = False
         print(f"开始生成Excel文件--------")
         
         # 生成所有记录超过3%的标的的收盘涨幅
         for k,v in context.ids_a1_info_dict.items():
+            if v.over_3_time == 0:
+                continue
             pre_close = context.ids_buy_target_info_dict[k].pre_close
             cur_price = context.ids_buy_target_info_dict[k].price
             close_rate = (cur_price - pre_close) / pre_close
@@ -1219,8 +1237,10 @@ def monitor_A1(context, tick):
         # 已经测试过了，x: x[1]的意思就是items中的索引1（也就是key(0)，value(1)中的value），如果value是数组的话，还可以进一步指定二维数组的位置
         dict_a1_for_sort = {}
         for k,v in context.ids_a1_info_dict.items():
+            if v.over_3_time == 0:
+                continue
             dict_a1_for_sort[k] = v.close_rate
-        sorted_a1_close_rate_dict = dict(sorted(dict_a1_for_sort.items(), key=lambda x: x[1], reverse=True))
+        sorted_a1_close_rate_dict = dict(sorted(dict_a1_for_sort.items(), key=lambda x: x[1], reverse=False))
         sorted_a1_close_rate_arr = []
         for k in sorted_a1_close_rate_dict.keys():
             sorted_a1_close_rate_arr.append(k)
@@ -1273,30 +1293,32 @@ def monitor_A1(context, tick):
         # 正式的数据从第三行开始写（由于表格的固定设置）
         start_row = 3
         for k,v in context.ids_a1_info_dict.items():
+            if v.over_3_time == 0:
+                continue
             # 写入excel一共分3个批次：
             # 1.当日的最高最低以及附带数据
             # 2.按照3%触发顺序的一个表格
             # 3.按照当日收盘幅度的一个表格
             sheet.cell(start_row, 1).value = k[5:]
             sheet.cell(start_row, 2).value = context.ids_buy_target_info_dict[k].name
-            sheet.cell(start_row, 3).value = str(round(context.ids_a1_info_dict[k].lowest_rate * 100, 3)) + "%"
+            sheet.cell(start_row, 3).value = str(round(context.ids_a1_info_dict[k].lowest_rate * 100, 2)) + "%"
             sheet.cell(start_row, 4).value = str(context.ids_a1_info_dict[k].lowest_rate_time.hour) + ":" + str(context.ids_a1_info_dict[k].lowest_rate_time.minute)
             sheet.cell(start_row, 5).value = str(context.ids_a1_info_dict[k].over_3_time.hour) + ":" + str(context.ids_a1_info_dict[k].over_3_time.minute)
-            sheet.cell(start_row, 6).value = str(round(context.ids_a1_info_dict[k].highest_rate * 100, 3)) + "%"
+            sheet.cell(start_row, 6).value = str(round(context.ids_a1_info_dict[k].highest_rate * 100, 2)) + "%"
             sheet.cell(start_row, 7).value = str(context.ids_a1_info_dict[k].highest_rate_time.hour) + ":" + str(context.ids_a1_info_dict[k].highest_rate_time.minute)
-            sheet.cell(start_row, 8).value = str(round(context.ids_a1_info_dict[k].close_rate * 100, 3)) + "%"
+            sheet.cell(start_row, 8).value = str(round(context.ids_a1_info_dict[k].close_rate * 100, 2)) + "%"
             
             key_for_3_rate = context.ids_a1_time_sorted_arr[start_row - 3]
             sheet.cell(start_row, 9).value = key_for_3_rate[5:]
             sheet.cell(start_row, 10).value = context.ids_buy_target_info_dict[key_for_3_rate].name
             sheet.cell(start_row, 11).value = str(context.ids_a1_info_dict[key_for_3_rate].over_3_time.hour) + ":" + str(context.ids_a1_info_dict[key_for_3_rate].over_3_time.minute)
-            sheet.cell(start_row, 12).value = str(round(context.ids_a1_info_dict[key_for_3_rate].close_rate * 100, 3)) + "%"
+            sheet.cell(start_row, 12).value = str(round(context.ids_a1_info_dict[key_for_3_rate].close_rate * 100, 2)) + "%"
             
             key_for_close_rate = sorted_a1_close_rate_arr[start_row - 3]
             sheet.cell(start_row, 13).value = key_for_close_rate[5:]
             sheet.cell(start_row, 14).value = context.ids_buy_target_info_dict[key_for_close_rate].name
             sheet.cell(start_row, 15).value = str(context.ids_a1_info_dict[key_for_close_rate].over_3_time.hour) + ":" + str(context.ids_a1_info_dict[key_for_close_rate].over_3_time.minute)
-            sheet.cell(start_row, 16).value = str(round(context.ids_a1_info_dict[key_for_close_rate].close_rate * 100, 3)) + "%"
+            sheet.cell(start_row, 16).value = str(round(context.ids_a1_info_dict[key_for_close_rate].close_rate * 100, 2)) + "%"
             
             # 每写完一行，移动一次工作行数
             start_row += 1
@@ -1305,6 +1327,9 @@ def monitor_A1(context, tick):
         # 保存工作簿
         workbook.save(f"c:/users/administrator/desktop/A1监控-{context.now.date()}.xlsx")
         print(f"生成Excel文件结束--------")
+        
+    if context.test_info == 2:
+        print(f"monitor phase 3 cost time:[{time.time() - t:.4f} s]")
 
 
 def on_bar(context, bars):
@@ -1313,6 +1338,9 @@ def on_bar(context, bars):
 
 
 def on_tick(context, tick):
+    if context.tick_count_for_statistics == 0:        
+        context.record_time = time.time()
+        
     context.tick_count_for_statistics += 1
     if context.test_info == 1:
         print(f'---------on_tick({tick.symbol})---------')
@@ -1325,16 +1353,16 @@ def on_tick(context, tick):
     t = time.time()
 
     if context.ids[tick.symbol].buy_flag == 1:
-        if (tick.price > 0) and (tick.symbol in context.ids_buy_target_info_dict.keys()):
+        if tick.price > 0:
             context.ids_buy_target_info_dict[tick.symbol].price = tick.price
             context.ids_buy_target_info_dict[tick.symbol].first_record_flag = True
         # else:
         #     print(f"potential [buy]price error, == 0, [{tick.symbol}]")
-    if context.ids[tick.symbol].buy_flag == 0:
-        # 为什么这里判断大于0，因为这个订阅很扯，9点30之前有些票会给你发价格0过来，3点以后有些之前有效的票，也会发0给你，所以必须判断
-        if tick.price > 0:
-            context.ids_virtual_sell_target_info_dict[tick.symbol].price = tick.price
-            context.ids_virtual_sell_target_info_dict[tick.symbol].first_record_flag = True
+    # if context.ids[tick.symbol].buy_flag == 0:
+    #     # 为什么这里判断大于0，因为这个订阅很扯，9点30之前有些票会给你发价格0过来，3点以后有些之前有效的票，也会发0给你，所以必须判断
+    #     if tick.price > 0:
+    #         context.ids_virtual_sell_target_info_dict[tick.symbol].price = tick.price
+    #         context.ids_virtual_sell_target_info_dict[tick.symbol].first_record_flag = True
 
     # 根据设置的tick handle frequence来跳过tick的处理
     # context.ids[tick.symbol].tick_cur_count += 1
@@ -1355,22 +1383,23 @@ def on_tick(context, tick):
         if record_all:
             context.get_all_buy_price_flag = True
 
-    invalid_sell_symbol = ""
-    if (not context.get_all_sell_price_flag):
-        record_all = True
-        for k,v in context.ids_virtual_sell_target_info_dict.items():
-            # 这里用过first_record_flag比较，但是不行，验证发现price第一次记录了也很可能是0，原因不明
-            # 使用还是必须要用price，否则就会出现之前刚刚开盘统计数据最低就到-4，-5，甚至更低，就是因为好几只票，明明有价格，但是第一次进来给的0
-            if v.price == 0:
-                invalid_sell_symbol = k
-                record_all = False
-                break
-        if record_all:
-            context.get_all_sell_price_flag = True
+    # invalid_sell_symbol = ""
+    # if (not context.get_all_sell_price_flag):
+    #     record_all = True
+    #     for k,v in context.ids_virtual_sell_target_info_dict.items():
+    #         # 这里用过first_record_flag比较，但是不行，验证发现price第一次记录了也很可能是0，原因不明
+    #         # 使用还是必须要用price，否则就会出现之前刚刚开盘统计数据最低就到-4，-5，甚至更低，就是因为好几只票，明明有价格，但是第一次进来给的0
+    #         if v.price == 0:
+    #             invalid_sell_symbol = k
+    #             record_all = False
+    #             break
+    #     if record_all:
+    #         context.get_all_sell_price_flag = True
 
     # 更新缓存价格，在外面更新，里面return的条件太多了，这样更新的价格，statistics也可以用
     if context.tick_count_for_statistics >= len(context.ids):
         context.tick_count_for_statistics = 0
+        print(f"目前整个监控全部循环({len(context.ids)})一次耗时: {time.time() - context.record_time:.4f} s")
         if invalid_buy_symbol != "":
             print(f"卖出列表中存在无法获取price的情况[{invalid_buy_symbol}]，等待一段时间（30s）后仍然无法获取到的，说明该标的存在某些异常，但是对于监控脚本可以不进行处理")
         if context.test_info == 1:
@@ -1390,12 +1419,12 @@ def on_tick(context, tick):
             context.tick_count_for_buy_ok = True
         else:
             context.tick_count_for_buy_ok = False
-    if context.get_all_sell_price_flag:
-        context.tick_count_for_sell += 1
-        if (context.tick_count_for_sell > (len(context.ids) * context.tick_count_limit_rate_for_sell)):
-            context.tick_count_for_sell_ok = True
-        else:
-            context.tick_count_for_sell_ok = False
+    # if context.get_all_sell_price_flag:
+    #     context.tick_count_for_sell += 1
+    #     if (context.tick_count_for_sell > (len(context.ids) * context.tick_count_limit_rate_for_sell)):
+    #         context.tick_count_for_sell_ok = True
+    #     else:
+    #         context.tick_count_for_sell_ok = False
             
     # if (not context.get_all_buy_price_flag):
     #     print(f"目前尚未获得所有")

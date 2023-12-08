@@ -14,7 +14,7 @@ import re
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
-def StrategyB():
+def StrategyX():
     pass
 
 # 全局需要修改的变量，如果策略变化（比如买卖变化，策略本身变化）都应该调整下面的值
@@ -26,7 +26,7 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
+order_overtime = 6 # 设置的委托超时时间，超时后撤单，单位秒
 sell_all_time = "13:35"
 
 class BuyMode:
@@ -206,8 +206,8 @@ def refresh(context):
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -907,8 +907,8 @@ def init(context):
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -1471,9 +1471,6 @@ def try_buy_strategyA(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -1995,9 +1992,6 @@ def try_buy_strategyB(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2526,9 +2520,6 @@ def try_buy_strategyB1(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -3225,6 +3216,11 @@ def on_order_status(context, order):
             context.ids_buy_target_info_dict[order.symbol].total_holding += order.filled_volume
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
+            
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            if (context.ids[order.symbol].buy_with_num != 0):
+                context.ids[order.symbol].buy_with_num = 0
+                context.ids[order.symbol].buy_with_num_handled_flag = True
             
 
     # [MAYBE TODO]订单部分成交的话（status == 2），暂不消除订单记录--------

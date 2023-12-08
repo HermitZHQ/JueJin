@@ -27,7 +27,7 @@ buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
 order_overtime = 15 # 设置的委托超时时间，超时后撤单，单位秒
-sell_all_time = "13:35"
+sell_all_time = "15:35"
 
 class BuyMode:
     def __init__(self):
@@ -206,8 +206,8 @@ def refresh(context):
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -833,7 +833,7 @@ def init(context):
     elif context.strategy_info.BA == 1:
         context.Sell_Increase_Rate = 0.07
     elif context.strategy_info.AA == 1:
-        context.Sell_Increase_Rate = 0.07
+        context.Sell_Increase_Rate = 0.12
     add_parameter(key='Sell_Increase_Rate', value=context.Sell_Increase_Rate, min=-1, max=1, name='卖出时涨幅比例', intro='', group='2', readonly=False)
 
     context.Sell_Loss_Limit = -0.2
@@ -842,7 +842,7 @@ def init(context):
     elif context.strategy_info.BA == 1:
         context.Sell_Loss_Limit = -0.035
     elif context.strategy_info.AA == 1:
-        context.Sell_Loss_Limit = -0.035
+        context.Sell_Loss_Limit = -0.04
     add_parameter(key='Sell_Loss_Limit', value=context.Sell_Loss_Limit, min=-1, max=1, name='止损比例', intro='', group='2', readonly=False)
 
     context.Sell_All_Increase_Rate = 0.2
@@ -856,7 +856,7 @@ def init(context):
     elif context.strategy_info.A == 1:
         context.Sell_All_Increase_Rate = 0.0113
     elif context.strategy_info.AA == 1:
-        context.Sell_All_Increase_Rate = 0.0066
+        context.Sell_All_Increase_Rate = 0.02
         
     context.Sell_All_Loss_Rate = -0.2
     if context.strategy_info.B == 1:
@@ -864,7 +864,7 @@ def init(context):
     elif context.strategy_info.BA == 1:
         context.Sell_All_Loss_Rate = -0.016
     elif context.strategy_info.AA == 1:
-        context.Sell_All_Loss_Rate = -0.035
+        context.Sell_All_Loss_Rate = -1.035
     add_parameter(key='Sell_All_Increase_Rate', value=context.Sell_All_Increase_Rate, min=-1, max=1, name='整体涨幅', intro='', group='2', readonly=False)
     add_parameter(key='Sell_All_Loss_Rate', value=context.Sell_All_Loss_Rate, min=-1, max=1, name='整体止损', intro='', group='2', readonly=False)
     # 取巧参数（参数赋值没有实际意义，只是用来重载ids配置文件），该参数变化后，重新load ids，重新订阅最新加载的ids
@@ -912,8 +912,8 @@ def init(context):
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -1477,9 +1477,6 @@ def try_buy_strategyA(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2010,9 +2007,6 @@ def try_buy_strategyB(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2560,9 +2554,6 @@ def try_buy_strategyB1(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2935,9 +2926,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.002
                 context.sell_all_chase_raise_flag = False
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.002
-                context.sell_all_chase_raise_flag = False
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.002
+            #     context.sell_all_chase_raise_flag = False
         # 非常好的情况，求高收益，向坐标轴右侧包含（注意下面也是右侧包含，所以要小心else的先后顺序）
         elif total_float_profit_rate > 0.003:
             if context.strategy_info.B == 1:
@@ -2946,9 +2937,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.01
                 context.sell_all_chase_raise_flag = True
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.01
-                context.sell_all_chase_raise_flag = True
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.01
+            #     context.sell_all_chase_raise_flag = True
         # 比较好的情况，求高收益，向坐标轴右侧包含
         elif total_float_profit_rate > -0.0015:
             if context.strategy_info.B == 1:
@@ -2957,9 +2948,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0075
                 context.sell_all_chase_raise_flag = True
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0075
-                context.sell_all_chase_raise_flag = True
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.0075
+            #     context.sell_all_chase_raise_flag = True
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
             if context.strategy_info.B == 1:
@@ -2968,9 +2959,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0066
                 context.sell_all_chase_raise_flag = False
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
-                context.sell_all_chase_raise_flag = False
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.0066
+            #     context.sell_all_chase_raise_flag = False
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
     target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
@@ -3260,6 +3251,11 @@ def on_order_status(context, order):
             context.ids_buy_target_info_dict[order.symbol].total_holding += order.filled_volume
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
+            
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            if (context.ids[order.symbol].buy_with_num != 0):
+                context.ids[order.symbol].buy_with_num = 0
+                context.ids[order.symbol].buy_with_num_handled_flag = True
             
 
     # [MAYBE TODO]订单部分成交的话（status == 2），暂不消除订单记录--------

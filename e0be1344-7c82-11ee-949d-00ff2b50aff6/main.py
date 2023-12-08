@@ -206,8 +206,8 @@ def refresh(context):
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -907,8 +907,8 @@ def init(context):
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
         handled_num += 1
-        print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
-    print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -1471,9 +1471,6 @@ def try_buy_strategyA(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -1736,7 +1733,6 @@ def try_sell_strategyA(context, tick):
 
 
 def try_buy_strategyB(context, tick):
-
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
         #print(f'{tick.symbol}订单没有处理完毕，直接返回')
@@ -1996,9 +1992,6 @@ def try_buy_strategyB(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2527,9 +2520,6 @@ def try_buy_strategyB1(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -3226,6 +3216,11 @@ def on_order_status(context, order):
             context.ids_buy_target_info_dict[order.symbol].total_holding += order.filled_volume
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
+            
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            if (context.ids[order.symbol].buy_with_num != 0):
+                context.ids[order.symbol].buy_with_num = 0
+                context.ids[order.symbol].buy_with_num_handled_flag = True
             
 
     # [MAYBE TODO]订单部分成交的话（status == 2），暂不消除订单记录--------
