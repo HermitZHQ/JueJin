@@ -1158,6 +1158,9 @@ def monitor_A1(context, tick):
 
     # # 保存工作簿
     # workbook.save("c:/users/administrator/desktop/example.xlsx")
+
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
     
     t = 0
     if context.test_info == 2:
@@ -1353,7 +1356,7 @@ def on_tick(context, tick):
     t = time.time()
 
     if context.ids[tick.symbol].buy_flag == 1:
-        if tick.price > 0:
+        if (tick.price > 0) and (tick.symbol in context.ids_buy_target_info_dict.keys()):
             context.ids_buy_target_info_dict[tick.symbol].price = tick.price
             context.ids_buy_target_info_dict[tick.symbol].first_record_flag = True
         # else:

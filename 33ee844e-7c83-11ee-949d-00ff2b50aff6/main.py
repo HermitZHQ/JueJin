@@ -1226,8 +1226,13 @@ def try_buy_strategyA(context, tick):
         curHolding = pos.volume_today if (side_type == OrderSide_Buy) else pos.available_now
         #print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
 
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
+
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -1750,6 +1755,9 @@ def try_buy_strategyB(context, tick):
     else:
         curHolding = pos.volume_today if (side_type == OrderSide_Buy) else pos.available_now
         #print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
+
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
 
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
@@ -2276,8 +2284,13 @@ def try_buy_strategyB1(context, tick):
         curHolding = pos.volume_today if (side_type == OrderSide_Buy) else pos.available_now
         #print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
 
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
+
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -2933,6 +2946,8 @@ def info_statistics(context, tick):
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
     target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
+    if (context.test_info) == 6 and (now >= target_time):
+        log(f"调试盘终输出：highest_total_fpr:{context.statistics.highest_total_fpr} lowest_total_fpr:{context.statistics.lowest_total_fpr}")
     if (now >= target_time) and (context.statistics.highest_total_fpr < 1.0):
 
         # 在版本1中，输出所有标的当天最高和最低盈利情况
@@ -3062,10 +3077,25 @@ def on_tick(context, tick):
         if record_all:
             context.get_all_sell_price_flag = True
 
+    # 检测tick_count_for_statistics是否在收盘后出现了，次数累加不够的情况？？
+    if (context.test_info) == 6:
+        log(f"目前tick_count_for_statistics:{context.tick_count_for_statistics} len of ids:{len(context.ids)}")
+
     # 更新缓存价格，在外面更新，里面return的条件太多了，这样更新的价格，statistics也可以用
     if context.tick_count_for_statistics >= len(context.ids):
         # 检测未结委托，超时的话，无论原因都应该撤单重新操作
         check_unfinished_orders(context, tick)
+        
+        # 调试信息：有时候会偶尔出现不输出盘终总结的情况
+        if (context.test_info) == 6:
+            now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
+            target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
+            if now >= target_time:
+                log(f"已到盘终总结输出测试点01，且时间满足")
+            else:
+                log(f"已到盘终总结输出测试点01，但时间为满足条件")
+
+
         info_statistics(context, tick)
         context.tick_count_for_statistics = 0
         if invalid_sell_symbol != "":
