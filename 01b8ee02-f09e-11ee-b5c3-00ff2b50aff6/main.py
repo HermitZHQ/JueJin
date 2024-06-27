@@ -26,6 +26,8 @@ mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
 section_history_stock_count = 1
 
+OP_ID_C2S_QUICK_BUY = 120
+
 def VolumeMonitorDebug():
     pass
 
@@ -1330,6 +1332,10 @@ class ReciveClientThreadC(threading.Thread):
                     #客户端初始化完成，可以开始发送数据
                     elif self.context.operation_id_recive == 103:
                         self.context.client_init_complete_dic[self.client_socket] = True
+                    elif self.context.operation_id_recive == OP_ID_C2S_QUICK_BUY:
+                        quick_buy_id = self.client_socket.recv(4)
+                        buy_id = int.from_bytes(quick_buy_id, byteorder='big')
+                        print(f"准备开始处理急速购买标的[{buy_id}]")
                     #心跳测试，防止中午时段socket断开
                     elif self.context.operation_id_recive == 900:
                         print(f"this is heartbeat")

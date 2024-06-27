@@ -14,6 +14,8 @@ import subprocess
 import re
 import uuid
 
+OP_ID_C2S_QUICK_BUY = 120
+
 class AnalysisHistoryData():
     def __init__(self, symbol, amount, eob, name):
         self.symbol = symbol
@@ -61,6 +63,7 @@ class TestClientUI(QMainWindow):
   
     def initUI(self):  
         self.server_sokcet = None
+        self.client_socket = None
 
         self.MAX_H_SIZE = 70
         self.MAX_V_SIZE = 85
@@ -141,20 +144,20 @@ class TestClientUI(QMainWindow):
         self.send_data_to_server("8.137.48.212", 12346, {"name": "Alice", "message": "Hello, server!"})
  
     def send_data_to_server(self, server_ip, server_port, data):
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((server_ip, server_port))
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_socket.connect((server_ip, server_port))
 
         try:
             #尝试开启线程一直接受服务器响应,用QTread,thread会出问题
-            self.rfs_thread = ReciveQThread(client_socket)
+            self.rfs_thread = ReciveQThread(self.client_socket)
             self.rfs_thread.start()
 
             #尝试开启线程一直向服务器发送请求
-            sts_thread = threading.Thread(target = self.send_to_server, args=(client_socket,))
+            sts_thread = threading.Thread(target = self.send_to_server, args=(self.client_socket,))
             sts_thread.start()
 
             #开启心跳线程
-            self.heart_thread = SendQThread(client_socket)
+            self.heart_thread = SendQThread(self.client_socket)
             self.heart_thread.start()
 
             pass
@@ -198,6 +201,23 @@ class TestClientUI(QMainWindow):
     def send_to_server_client_init_complete(self, client_socket):
         operation_id = 103
         client_socket.sendall(operation_id.to_bytes(4))
+        
+    # 向服务发送急速买入的命令
+    def send_to_server_quick_buy(self, client_socket):
+        input_box_str = self.input_box_search.text()
+        if len(input_box_str) != 6:
+            print(f"急速买入的标的ID长度不正常，正常长度应该为6位！请检查，目前内容为：[{input_box_str}]")
+            return
+        
+        print(f"开始尝试急速买入标的[{input_box_str}]")
+        # 下面的int就是二进制，比如6位的标的：600001，用字符发送就要占6个字节，但是我们可以用int形式
+        # 一般的int等于4字节，也就是numpy.int32，为了进一步压缩，我们可以使用2字节（numpy.int16）？？，1字节是不行的，因为1字节最大能表达的数据只有256，不够我们表达股票标的ID
+        # 上面import numpy as np了，所以我们用np调用
+        
+        # 4+4=8字节
+        client_socket.sendall(OP_ID_C2S_QUICK_BUY.to_bytes(4) + int(input_box_str).to_bytes(4))
+        # print(f"search text:{input_box_str}")
+        
 
     #初始化所有容器
     def init_widget(self):
@@ -217,9 +237,16 @@ class TestClientUI(QMainWindow):
         name_label = QLabel(f'名称', self.w1.up_contnet_widget)
         self.w1.up_contnet_widget_layout.addWidget(name_label)
         #____添加w1里最上方的功能模块
-        input_box = QLineEdit(self)
-        input_box.returnPressed.connect(lambda: self.w1_select_stock(input_box))
-        self.w1.top_function_widget_layout.addWidget(input_box)
+        self.input_box_search = QLineEdit(self)
+        self.input_box_search.returnPressed.connect(lambda: self.w1_select_stock(self.input_box_search))
+        self.w1.top_function_widget_layout.addWidget(self.input_box_search)
+        
+        # 添加按钮支持急速买入
+        btn_quick_buy = QPushButton(self)
+        btn_quick_buy.setText("急速买入")
+        btn_quick_buy.setFixedSize(QSize(120, 35))
+        btn_quick_buy.pressed.connect(lambda: self.w1_quick_buy())
+        self.w1.top_function_widget_layout.addWidget(btn_quick_buy)
 
         #1分钟实时数据
         self.w2 = InitChildQwidGet()
@@ -360,6 +387,10 @@ class TestClientUI(QMainWindow):
                 child_widget.stock_widget_dic[self.simple_stock_with_stock[target_stork]].widget.setStyleSheet("QWidget { border: 1px solid red; }")
 
             self.last_set_red_style_stock = self.simple_stock_with_stock[target_stork]
+            
+    # w1中，添加的急速买入按钮功能
+    def w1_quick_buy(self):
+        self.send_to_server_quick_buy(self.client_socket)
 
     def create_new_window(self, title, w_num):
         return ScrollableLabels(title, w_num)
