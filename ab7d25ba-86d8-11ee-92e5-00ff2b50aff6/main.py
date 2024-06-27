@@ -609,9 +609,10 @@ def on_parameter(context, parameter):
         context.ids_a1_manual_generate_excel_flag = True
         refresh_statistics_info(context)
         if context.test_info == 99:
-            over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
-            over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
-            auto_generate_sell_list_with_ids_file(context)
+            # over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
+            # over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
+            # auto_generate_sell_list_with_ids_file(context)
+            output_final_statistics(context)
     elif (parameter.key == 'Refresh'):
         log("重新载入ids，重新订阅！")
         refresh(context)

@@ -698,9 +698,10 @@ def on_parameter(context, parameter):
         context.test_info = parameter.value
         refresh_statistics_info(context)
         if context.test_info == 99:
-            over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
-            over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
-            auto_generate_sell_list_with_ids_file(context)
+            # over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
+            # over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
+            # auto_generate_sell_list_with_ids_file(context)
+            output_final_statistics(context)
     elif (parameter.key == 'Refresh'):
         log("重新载入ids，重新订阅！")
         refresh(context)
@@ -2833,6 +2834,65 @@ def try_sell_strategyB1(context, tick):
 def on_bar(context, bars):
     print('---------on_bar---------')
     # print(bars)
+    
+def output_final_statistics(context):
+    
+    now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
+    target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
+    if (context.test_info) == 99 and (now >= target_time):
+        log(f"调试盘终输出：highest_total_fpr:{context.statistics.highest_total_fpr} lowest_total_fpr:{context.statistics.lowest_total_fpr}")
+    if (now >= target_time):
+
+        # 在版本1中，输出所有标的当天最高和最低盈利情况
+        for k,v in context.statistics.max_min_info_dict.items():
+            log(f"[statistics][{k}]最高：[{round(v.max * 100, 3)}%]，最低：[{round(v.min * 100, 3)}%]")
+
+        # 输出精确盈利（就是用(卖出后的mv - 卖出标的的成本mv) / 总成本mv，再减去0.13%的手续费，按理说应该是比较精确的）
+        # 注意手续费的0.13%是针对交易额的，并不能固定去减这个值，除非是全部资金，那就可以直接减
+        # 这样统计的话，就和总资金没有什么关系了
+        # 注意两个结构体并没有什么关系（sell_pos_dict和ids_virtual_sell_info_dict）
+        # 主要是因为之前保存文件的关系，没有统一结构体
+        cur_mv = 0 # 当天卖出后的票的mv（有可能比持仓成本高或者低）
+        vwap_mv = 0 # 当天卖出的票的成本mv（用于和cur_mv一起计算当天的盈利值）
+        total_mv = 0 # 用于统计当天所有需要卖出的总mv（不是总资金，总资金一直在变化，不用它）
+        for k,v in context.sell_pos_dict.items():
+            if k not in context.ids_virtual_sell_target_info_dict.keys():
+                continue
+            if v[1]:
+                cur_mv += (v[0] * v[2])
+                vwap_mv += (v[0] * context.ids_virtual_sell_target_info_dict[k].vwap)
+
+            # context.total_market_value_for_all_sell，用这个值也是可以的
+            # 不过我看了，sell_pos_dict也是会存文件的，所以这样写也没有问题，不会因为中途关闭出问题
+            total_mv += (v[0] * context.ids_virtual_sell_target_info_dict[k].vwap)
+
+        accurate_float_profit = (cur_mv - (cur_mv * 0.0013) - vwap_mv) / (total_mv) if total_mv != 0 else 0
+        log(f"\n[statistics][单卖可统计]今日最终精确整体盈利为：{round(accurate_float_profit * 100, 3)}%\n")
+
+        log(f"[statistics]今日最高整体盈利为：{round(context.statistics.highest_total_fpr * 100, 3)}%，出现时间为：{context.statistics.highest_total_fpr_time}")
+        context.statistics.highest_total_fpr = 2.0
+    if (now >= target_time):
+        log(f"[statistics]今日最低整体盈利为：{round(context.statistics.lowest_total_fpr * 100, 3)}%，出现时间为：{context.statistics.lowest_total_fpr_time}")
+        context.statistics.lowest_total_fpr = -2.0
+
+    # 版本2统计：止损止盈虚拟统计版本
+    if (now >= target_time):
+        log(f"[statistics][止]今日最高整体盈利为：{round(context.statistics.highest_total_fpr_limit_ver * 100, 3)}%，出现时间为：{context.statistics.highest_total_fpr_time_limit_ver}")
+        context.statistics.highest_total_fpr_limit_ver = 2.0
+    if (now >= target_time):
+        log(f"[statistics][止]今日最低整体盈利为：{round(context.statistics.lowest_total_fpr_limit_ver * 100, 3)}%，出现时间为：{context.statistics.lowest_total_fpr_time_limit_ver}")
+        context.statistics.lowest_total_fpr_limit_ver = -2.0
+
+        log(f"平仓时间[{context.record_sell_time}] 平仓时的瞬间整体盈利[{round(context.record_sell_tfpr * 100, 3)}%]")
+
+        market_value = context.account().cash['market_value'] # 市值，因为之前好像出现了统计错误，这里记录下收盘后的市值，有需要可以核算
+        log(f"收盘后的持仓市值为：{market_value}")
+        
+        # 3点的时候重置整个sell相关的信息，主要是配置文件中的mv改到-1，这个核心值可以控制整个卖出流程
+        context.total_market_value_for_all_sell = 0 # 只记录一次就ok
+    over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
+    over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
+    auto_generate_sell_list_with_ids_file(context)
 
 def info_statistics(context, tick):
     # 数据统计中的总市值不能再用账号的总市值了，因为都卖完以后，就不会变化了，但我们其实是想监控标的在3点前的最高整体盈利（时间）
