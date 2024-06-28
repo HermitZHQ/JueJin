@@ -87,6 +87,7 @@ def init(context):
     load_mac_address(context)
 
     # 线程Server 正式服12345, 调试服12346   3
+    # 这个是新版新版新版新版新版新版
     main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
     main_server_thread.start()
 
