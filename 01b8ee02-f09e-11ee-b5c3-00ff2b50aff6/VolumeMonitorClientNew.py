@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QTextEdit, QMainWindow, QLineEdit, QScrollArea, QLabel,QHBoxLayout,QSizePolicy
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QTextEdit, QMainWindow, QLineEdit, QScrollArea, QLabel, QHBoxLayout, QSizePolicy, QMessageBox
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QTimer, QObject
 from PyQt5.QtGui import QTextOption, QResizeEvent, QTextDocument
 from datetime import datetime, time, timedelta
@@ -205,18 +205,34 @@ class TestClientUI(QMainWindow):
     # 向服务发送急速买入的命令
     def send_to_server_quick_buy(self, client_socket):
         input_box_str = self.input_box_search.text()
-        if len(input_box_str) != 6:
-            print(f"急速买入的标的ID长度不正常，正常长度应该为6位！请检查，目前内容为：[{input_box_str}]")
+        if len(input_box_str) < 6:
+            print(f"急速买入的标的ID长度不正常，正常长度不应该小于6位！请检查，目前内容为：[{input_box_str}]")
             return
         
-        print(f"开始尝试急速买入标的[{input_box_str}]")
+        # 尝试拆分标的和买入金额，不一定会带金额，没有的话，就使用默认20w的设置
+        buy_id = 0
+        buy_amount = 20
+        if "#" in input_box_str:
+            str_arr = input_box_str.split('#')
+            buy_id = int(str_arr[0])
+            buy_amount = np.int16(str_arr[1])
+        else:
+            buy_id = int(input_box_str)
+        
+        reply = QMessageBox.question(None, '确认', f'您确定要急速买入标的[{buy_id}]-[{buy_amount}]w吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        
+        print(f"开始尝试急速买入标的[{buy_id}]")
         # 下面的int就是二进制，比如6位的标的：600001，用字符发送就要占6个字节，但是我们可以用int形式
-        # 一般的int等于4字节，也就是numpy.int32，为了进一步压缩，我们可以使用2字节（numpy.int16）？？，1字节是不行的，因为1字节最大能表达的数据只有256，不够我们表达股票标的ID
+        # 一般的int等于4字节，也就是numpy.int32，为了进一步压缩，我们可以使用2字节（numpy.int16）？？，2字节是不行的，只能到65536，不够，1字节更不行，因为1字节最大能表达的数据只有256，不够我们表达股票标的ID
         # 上面import numpy as np了，所以我们用np调用
         
-        # 4+4=8字节
-        client_socket.sendall(OP_ID_C2S_QUICK_BUY.to_bytes(4) + int(input_box_str).to_bytes(4))
-        # print(f"search text:{input_box_str}")
+        # 4 + 4 + 2 = 10字节
+        # 标的必须用int，4字节
+        # 买入金额用int16即可，可达到65536w，已经非常大了不可能超过，这样可节约2个字节
+        client_socket.sendall(OP_ID_C2S_QUICK_BUY.to_bytes(4) + int(buy_id).to_bytes(4) + np.int16(buy_amount).tobytes())
+        # print(f"search text:{buy_id}")
         
 
     #初始化所有容器

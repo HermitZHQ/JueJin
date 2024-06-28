@@ -13,6 +13,7 @@ import numpy as np
 import re
 import pickle
 import subprocess
+import math
 
 global_i = 0
 str_strategy = 'VDebug'
@@ -30,6 +31,25 @@ OP_ID_C2S_QUICK_BUY = 120
 
 def VolumeMonitorDebug():
     pass
+
+class TargetInfo:
+    def __init__(self):
+        self.name = ""
+        self.hold = 0
+        self.price = 0
+        self.first_record_flag = False
+        self.pre_close = 0
+        self.vwap = 0
+        self.upper_limit = 0 # 涨停价
+        self.lower_limit = 0
+        self.suspended = False # 是否停牌
+        self.sold_flag = False
+        self.sold_price = 0 # 虚拟卖出时的记录价格，用于统计信息
+        self.sold_mv = 0 # 虚拟卖出后锁定的市值
+        self.fpr = -1 # 浮动盈亏缓存
+        self.total_holding = 0 # 这里的总量并不从pos中取，而是从完成（部成）的order中记录，因为我发现完全用pos中的有时候数据更新不及时，比如部成的数量都已经显示有10000股了，且已经输出到日志中，但是紧接着马上取pos中的持仓，却还没有更新到该值，取出来可能是4，5000，虽然这个发生的几率很小，但是还是需要处理
+        self.partial_holding = 0 # 记录部成的临时值
+        self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
 
 # 策略中必须有init方法
 def init(context):
@@ -64,6 +84,7 @@ def init(context):
     context.ready_second_for_send = []
     context.init_complete_client = {}
     context.ids = {}
+    context.ids_info_dict = {} # 记录一些tick中的标的数据，方便在其他地方的时候可以使用，数据格式为：key：标的字符串  value：是TargetInfo类型
     context.is_subscribe = False
     context.iniclient_socket_lock = threading.Lock()
 
@@ -459,6 +480,9 @@ def init_client_fragments(context):
                 if_complete = 1
 
 def on_tick(context, tick):
+    
+    # 更新对应标的的一些保存信息
+    context.ids_info_dict[tick.symbol].price = tick.price
 
     #客户端断开连接后，从socket_dic中移除相应sokcet
     if len(context.delete_temp_adress_arr) > 0:
@@ -1123,6 +1147,7 @@ def load_ids(context):
                 if str_tmp not in context.subscription_stock_arr:
                     context.subscription_stock_arr.append(str_tmp)
                     context.temp_judge_second_data_dic[str_tmp] = False
+                    context.ids_info_dict[str_tmp] = TargetInfo()
 
 #读取允许连入的MAC地址
 def load_mac_address(context):
@@ -1296,6 +1321,46 @@ class ReciveClientThreadC(threading.Thread):
     def stop(self):
         self._stop_event.set()
         print("线程已停止")
+        
+    def socket_receive_quick_buy(self):
+        quick_buy_id = self.client_socket.recv(4)
+        quick_buy_amount = self.client_socket.recv(2)
+        buy_id = int.from_bytes(quick_buy_id, byteorder='big')
+        str_tmp = str(buy_id)
+        buy_amount = int.from_bytes(quick_buy_amount, byteorder='little')
+        first3 = str_tmp[:3]
+        if (first3 == '600'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '601'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '603'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '605'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '688'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '689'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '000'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '001'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '002'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '003'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '300'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '301'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+            
+        print(f"准备开始处理急速购买标的[{str_tmp}]-[{buy_amount}]w")
+        base_num = 1
+        if (str_tmp in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_tmp].price > 0):
+            buy_in_num = math.floor(buy_amount * 10000 / self.context.ids_info_dict[str_tmp].price)
+            base_num = math.floor(buy_in_num / 100)
+            
+        order_volume(symbol=str_tmp, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
 
     def run(self):
         #主动停止线程while not self._stop_event.is_set():
@@ -1333,10 +1398,10 @@ class ReciveClientThreadC(threading.Thread):
                     #客户端初始化完成，可以开始发送数据
                     elif self.context.operation_id_recive == 103:
                         self.context.client_init_complete_dic[self.client_socket] = True
+                        
                     elif self.context.operation_id_recive == OP_ID_C2S_QUICK_BUY:
-                        quick_buy_id = self.client_socket.recv(4)
-                        buy_id = int.from_bytes(quick_buy_id, byteorder='big')
-                        print(f"准备开始处理急速购买标的[{buy_id}]")
+                        self.socket_receive_quick_buy()
+                        
                     #心跳测试，防止中午时段socket断开
                     elif self.context.operation_id_recive == 900:
                         print(f"this is heartbeat")
