@@ -186,7 +186,9 @@ def refresh(context):
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
+    t = time.time()
     buy_num = 0
+    handled_num = 0 # 用于计算初始化进度
     context.ids_buy = []
     context.ids_sell = []
     for k, v in context.ids.items():
@@ -224,6 +226,9 @@ def refresh(context):
                 context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
+        handled_num += 1
+        # print(f"初始化数据进度：[{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
+    # print(f"初始化总计耗时:[{time.time() - t:.4f}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -601,11 +606,13 @@ def on_parameter(context, parameter):
     elif (parameter.key == 'test_info'):
         print(f'test_info 参数已经调整为：{parameter.value}')
         context.test_info = parameter.value
+        context.ids_a1_manual_generate_excel_flag = True
         refresh_statistics_info(context)
         if context.test_info == 99:
-            over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
-            over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
-            auto_generate_sell_list_with_ids_file(context)
+            # over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
+            # over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
+            # auto_generate_sell_list_with_ids_file(context)
+            output_final_statistics(context)
     elif (parameter.key == 'Refresh'):
         log("重新载入ids，重新订阅！")
         refresh(context)
@@ -630,6 +637,7 @@ def init(context):
     context.record_sell_tfpr = 0
     add_parameter(key='test_info', value=context.test_info, min=-1, max=1, name='TestInfo', intro='', group='3', readonly=False)
     #print(f'{context.now.strftime("%H:%M:%S")}')
+    context.record_time = 0 # 用于记录时间差，基本用法就是初始化 = time.time()，然后计算时间差用time.time() - 上次记录的时间，可以在下面搜索用法
     context.tick_count_for_statistics = 0 # 记录经过的tick次数，有些函数不需要每次tick都调用，会造成性能损耗，用这个变量进行控制
     context.tick_count_for_sell = 0 # 用于控制sell函数中一些消耗较大的代码块的运行频率
     context.tick_count_limit_rate_for_sell = 0.2 # 具体的控制百分比（针对context.ids的长度），比如有1000标的，那么0.2就是20%，200只标的经过后，再运行一次
@@ -720,6 +728,7 @@ def init(context):
     context.ids_a1_info_dict = {} # 以超过3%后的时间，进行存储的dict，后续应该需要进行排序，看如何处理
     context.ids_a1_time_sorted_arr = []
     context.ids_a1_excel_generated_flag = False # 全局标识，用于3点30输出一次excel文件结果
+    context.ids_a1_manual_generate_excel_flag = False # 可用于中途手动生成excel文件，收盘时临时用当下的涨幅填充
     # 后续扩展监控保存数据，下面的x只是示例，并没有使用
     context.ids_x = {}
 
@@ -781,11 +790,14 @@ def init(context):
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
+    t = time.time()
     buy_num = 0
+    handled_num = 0 # 用于显示处理进度
     context.ids_buy = []
     context.ids_sell = []
     for k, v in context.ids.items():
         if (v.buy_flag == 1):
+            print(f"start get info of [{k}]")
             context.ids_buy_target_info_dict[k] = TargetInfo()
 
             # 在初始化的时候就直接获取各项缓存值（反正后面也会获取，而且这里获取，会更集中）
@@ -817,6 +829,9 @@ def init(context):
             context.ids_sell.append(k)
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
+        handled_num += 1
+        print(f"初始化数据进度：[{k}] [{round(handled_num / len(context.ids.items()) * 100, 3)}%]")
+    print(f"初始化总计耗时:[{time.time() - t}]s")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -1144,10 +1159,19 @@ def monitor_A1(context, tick):
 
     # # 保存工作簿
     # workbook.save("c:/users/administrator/desktop/example.xlsx")
+
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
     
-    print(f"已开始进入监视函数.............")
+    t = 0
+    if context.test_info == 2:
+        t = time.time()
     
-    curVal = tick.price
+    curVal = context.ids_buy_target_info_dict[tick.symbol].price
+    # 如果price不正常的话，则跳过对该标的的监控即可
+    if curVal <= 0:
+        return
+    
     # 监控上涨幅度是否超过3%，是就进入记录池
     if context.ids_buy_target_info_dict[tick.symbol].pre_close == 0:
         info = get_instruments(symbols = tick.symbol, df = True)
@@ -1166,33 +1190,47 @@ def monitor_A1(context, tick):
     # 掘金里的涨跌幅是需要自己手动计算的
     rate = (curVal - pre_close) / pre_close
     
-    # 超过3%就进行记录（只记录一次）
-    if (rate >= 0.03) and (tick.symbol not in context.ids_a1_info_dict.keys()):
+    if context.test_info == 2:
+        print(f"monitor phase 1 cost time:[{time.time() - t:.4f} s]")
+    
+    # 这里需要先初始化，而不是等到3%触发再初始化（会导致记录不到完整的最高和最低值）
+    if (tick.symbol not in context.ids_a1_info_dict.keys()):
         context.ids_a1_info_dict[tick.symbol] = MonitorA1Info()
+        
+    # 超过3%就进行记录（只记录一次）
+    if (rate >= 0.03) and (context.ids_a1_info_dict[tick.symbol].over_3_time == 0):
         context.ids_a1_info_dict[tick.symbol].over_3_time = context.now
         # 直接按顺序推入到记录的array里面，这样直接最后就是排序好的，不需要再次整理dict或者arr
-        context.ids_a1_time_sorted_array.append(tick.symbol)
+        context.ids_a1_time_sorted_arr.append(tick.symbol)
         print(f"发现突破3%的标的[{tick.symbol}]")
         
-    # 更新超过3%被记录dict中的最高和最低值
-    if tick.symbol in context.ids_a1_info_dict.keys():
-        if (rate > context.ids_a1_info_dict[tick.symbol].highest_rate):
-            context.ids_a1_info_dict[tick.symbol].highest_rate = rate
-            context.ids_a1_info_dict[tick.symbol].highest_rate_time = context.now
-            print(f"正在更新[{tick.symbol}]高值到[{rate}]")
-        elif (rate < context.ids_a1_info_dict[tick.symbol].lowest_rate):
-            context.ids_a1_info_dict[tick.symbol].lowest_rate = rate
-            context.ids_a1_info_dict[tick.symbol].lowest_rate_time = context.now
-            print(f"正在更新[{tick.symbol}]低值到[{rate}]")
+    # 更新超过3%被记录dict中的最高和最低值（这里是错误的逻辑，不能再超过3%后再记录最高最低，这样的话，拿不到全天的最高和最低）
+    if (rate > context.ids_a1_info_dict[tick.symbol].highest_rate):
+        context.ids_a1_info_dict[tick.symbol].highest_rate = rate
+        context.ids_a1_info_dict[tick.symbol].highest_rate_time = context.now
+        print(f"正在更新[{tick.symbol}]高值到[{round(rate * 100, 2)}%]")
+    # 更新最低值不能写成elif，这个错误犯了超过2次了，这里备注一下，最高和最低需要同时统计，否则一直在涨的话，记录的最低值就是有bug的（比如从0%到9%一直涨，我们都记录不了最低值，其实最低应该是0%，但是最后可能就记录到8.9%这样的数据）
+    if (rate < context.ids_a1_info_dict[tick.symbol].lowest_rate):
+        context.ids_a1_info_dict[tick.symbol].lowest_rate = rate
+        context.ids_a1_info_dict[tick.symbol].lowest_rate_time = context.now
+        print(f"正在更新[{tick.symbol}]低值到[{round(rate * 100, 2)}%]")
         
-    reach_1530 = reach_time(context, "10:00") # 这里改成10点30先进行测试，测试完毕后，最终改到15点30
+    if context.test_info == 2:
+        print(f"monitor phase 2 cost time:[{time.time() - t:.4f} s]")
+        
+    reach_1530 = reach_time(context, "15:03")
     # 到达15点30后，开始统计并输出今天的结果，生成excel文件，只输出一次
-    if (not context.ids_a1_excel_generated_flag) and (reach_1530):
-        # 转换标识，只输出一次文件
-        context.ids_a1_excel_generated_flag = True
+    if ((not context.ids_a1_excel_generated_flag) and (reach_1530)) or (context.ids_a1_manual_generate_excel_flag):
+        # 转换标识，只自动输出一次文件，且非手动激活的情况下
+        if (not context.ids_a1_manual_generate_excel_flag):
+            context.ids_a1_excel_generated_flag = True
+        context.ids_a1_manual_generate_excel_flag = False
+        print(f"开始生成Excel文件--------")
         
         # 生成所有记录超过3%的标的的收盘涨幅
         for k,v in context.ids_a1_info_dict.items():
+            if v.over_3_time == 0:
+                continue
             pre_close = context.ids_buy_target_info_dict[k].pre_close
             cur_price = context.ids_buy_target_info_dict[k].price
             close_rate = (cur_price - pre_close) / pre_close
@@ -1201,7 +1239,12 @@ def monitor_A1(context, tick):
         # 对收盘涨跌幅进行一次排序
         # 对dict先进行排序
         # 已经测试过了，x: x[1]的意思就是items中的索引1（也就是key(0)，value(1)中的value），如果value是数组的话，还可以进一步指定二维数组的位置
-        sorted_a1_close_rate_dict = dict(sorted(context.ids_a1_info_dict.items(), key=lambda x: x[1], reverse=True))
+        dict_a1_for_sort = {}
+        for k,v in context.ids_a1_info_dict.items():
+            if v.over_3_time == 0:
+                continue
+            dict_a1_for_sort[k] = v.close_rate
+        sorted_a1_close_rate_dict = dict(sorted(dict_a1_for_sort.items(), key=lambda x: x[1], reverse=False))
         sorted_a1_close_rate_arr = []
         for k in sorted_a1_close_rate_dict.keys():
             sorted_a1_close_rate_arr.append(k)
@@ -1254,211 +1297,54 @@ def monitor_A1(context, tick):
         # 正式的数据从第三行开始写（由于表格的固定设置）
         start_row = 3
         for k,v in context.ids_a1_info_dict.items():
+            if v.over_3_time == 0:
+                continue
             # 写入excel一共分3个批次：
             # 1.当日的最高最低以及附带数据
             # 2.按照3%触发顺序的一个表格
             # 3.按照当日收盘幅度的一个表格
-            sheet.cell(start_row, 1).value = k
+            sheet.cell(start_row, 1).value = k[5:]
             sheet.cell(start_row, 2).value = context.ids_buy_target_info_dict[k].name
-            sheet.cell(start_row, 3).value = context.ids_a1_info_dict[k].lowest_rate
+            sheet.cell(start_row, 3).value = str(round(context.ids_a1_info_dict[k].lowest_rate * 100, 2)) + "%"
             sheet.cell(start_row, 4).value = str(context.ids_a1_info_dict[k].lowest_rate_time.hour) + ":" + str(context.ids_a1_info_dict[k].lowest_rate_time.minute)
             sheet.cell(start_row, 5).value = str(context.ids_a1_info_dict[k].over_3_time.hour) + ":" + str(context.ids_a1_info_dict[k].over_3_time.minute)
-            sheet.cell(start_row, 6).value = context.ids_a1_info_dict[k].highest_rate
+            sheet.cell(start_row, 6).value = str(round(context.ids_a1_info_dict[k].highest_rate * 100, 2)) + "%"
             sheet.cell(start_row, 7).value = str(context.ids_a1_info_dict[k].highest_rate_time.hour) + ":" + str(context.ids_a1_info_dict[k].highest_rate_time.minute)
-            sheet.cell(start_row, 8).value = context.ids_a1_info_dict[k].close_rate
+            sheet.cell(start_row, 8).value = str(round(context.ids_a1_info_dict[k].close_rate * 100, 2)) + "%"
             
-            key_for_3_rate = context.ids_a1_time_sorted_array[start_row - 3]
-            sheet.cell(start_row, 9).value = key_for_3_rate
+            key_for_3_rate = context.ids_a1_time_sorted_arr[start_row - 3]
+            sheet.cell(start_row, 9).value = key_for_3_rate[5:]
             sheet.cell(start_row, 10).value = context.ids_buy_target_info_dict[key_for_3_rate].name
             sheet.cell(start_row, 11).value = str(context.ids_a1_info_dict[key_for_3_rate].over_3_time.hour) + ":" + str(context.ids_a1_info_dict[key_for_3_rate].over_3_time.minute)
-            sheet.cell(start_row, 12).value = context.ids_a1_info_dict[key_for_3_rate].close_rate
+            sheet.cell(start_row, 12).value = str(round(context.ids_a1_info_dict[key_for_3_rate].close_rate * 100, 2)) + "%"
             
             key_for_close_rate = sorted_a1_close_rate_arr[start_row - 3]
-            sheet.cell(start_row, 13).value = key_for_close_rate
+            sheet.cell(start_row, 13).value = key_for_close_rate[5:]
             sheet.cell(start_row, 14).value = context.ids_buy_target_info_dict[key_for_close_rate].name
             sheet.cell(start_row, 15).value = str(context.ids_a1_info_dict[key_for_close_rate].over_3_time.hour) + ":" + str(context.ids_a1_info_dict[key_for_close_rate].over_3_time.minute)
-            sheet.cell(start_row, 16).value = context.ids_a1_info_dict[key_for_close_rate].close_rate
+            sheet.cell(start_row, 16).value = str(round(context.ids_a1_info_dict[key_for_close_rate].close_rate * 100, 2)) + "%"
             
             # 每写完一行，移动一次工作行数
             start_row += 1
             
 
         # 保存工作簿
-        workbook.save(f"c:/users/administrator/desktop/{context.now.date()}.xlsx")
+        workbook.save(f"c:/users/administrator/desktop/A1监控-{context.now.date()}.xlsx")
+        print(f"生成Excel文件结束--------")
+        
+    if context.test_info == 2:
+        print(f"monitor phase 3 cost time:[{time.time() - t:.4f} s]")
 
 
 def on_bar(context, bars):
     print('---------on_bar---------')
     # print(bars)
 
-def info_statistics(context, tick):
-    # 数据统计中的总市值不能再用账号的总市值了，因为都卖完以后，就不会变化了，但我们其实是想监控标的在3点前的最高整体盈利（时间）
-    # cur_market_value = context.account().cash['market_value'] # 当前总市值
-    # cur_market_value = float('%.2f' % cur_market_value)
-
-    if not context.get_all_sell_price_flag:
-        return
-
-    cur_market_value = 0
-    cur_market_value_limit_ver = 0
-    # 做数据统计时，我们都是使用的标的当前价格，不管标的是否已经卖出（这和sell中计算整体盈利是不一样的）
-    # 这样我们才能正确统计它们一天的整体最高盈利是多少，出现在什么时间
-    valid_tfpr_flag = True
-    debug_count = 0
-    for k,v in context.sell_pos_dict.items():
-        # 应该跳过sell_pos_dict中持仓为0的情况（比如有时候出问题，手动粘贴sell列表，但是有些并没有成功买入）
-        # 这时候再去取vwap的话，就是0，这样就无法正常统计了
-        if v[0] == 0:
-            continue
-
-        # 一些崩溃或者无效的错误条件判断
-        if (k not in context.ids_virtual_sell_target_info_dict.keys()):
-            print(f"can not do the statistics, key not exsits [{k}]")
-            valid_tfpr_flag = False
-            break
-        else:
-            if (context.ids_virtual_sell_target_info_dict[k].vwap == 0) and (not v[1]):
-                print(f"can not do the statistics, vwap invalid when not sold, [{k}]")
-                valid_tfpr_flag = False
-                break
-
-        # 版本1为自由价格，无止损和止盈
-        mv = context.ids_virtual_sell_target_info_dict[k].price * v[0]
-        cur_market_value += mv
-        if mv == 0:
-            log(f"fatal potential error!!! mv should never be 0 here, key:[{k}] price[{context.ids_virtual_sell_target_info_dict[k].price}] holding[{v[0]}] vwap[{context.ids_virtual_sell_target_info_dict[k].vwap}]")
-        debug_count += 1
-        # 在版本1中（因为没有止损止盈）来更新各个标的的当天最高值和最低值情况
-        # 之前有个错误，就是使用了context.ids_virtual_sell_target_info_dict[k].fpr缓存值，这样的话一旦卖出后就不能跟踪了，还是要及时计算
-        fpr = (context.ids_virtual_sell_target_info_dict[k].price - context.ids_virtual_sell_target_info_dict[k].vwap) / context.ids_virtual_sell_target_info_dict[k].vwap if context.ids_virtual_sell_target_info_dict[k].vwap != 0 else 0
-        if fpr > context.statistics.max_min_info_dict[k].max:
-            context.statistics.max_min_info_dict[k].max = fpr
-            context.statistics.max_min_info_dict[k].time = context.now
-        if (fpr < context.statistics.max_min_info_dict[k].min) and (fpr > -0.25):
-            context.statistics.max_min_info_dict[k].min = fpr
-            context.statistics.max_min_info_dict[k].time = context.now
-
-        # 版本2为止盈止损版
-        mv_limit_ver = 0
-        if not context.ids_virtual_sell_target_info_dict[k].sold_flag:
-            fpr_limit_ver = (context.ids_virtual_sell_target_info_dict[k].price - context.ids_virtual_sell_target_info_dict[k].vwap) / context.ids_virtual_sell_target_info_dict[k].vwap if context.ids_virtual_sell_target_info_dict[k].vwap != 0 else 0
-
-            price_limit_ver = context.ids_virtual_sell_target_info_dict[k].price
-            mv_limit_ver = price_limit_ver * v[0]
-
-            if (fpr_limit_ver > context.Sell_Increase_Rate) and (v[1]):
-                price_limit_ver = v[2] # 要使用实际卖出的价格，用设置的百分比计算是不精确的，因为有些开盘就是-4%之类，直接超过了设置
-                context.ids_virtual_sell_target_info_dict[k].sold_flag = True
-                context.ids_virtual_sell_target_info_dict[k].sold_price = price_limit_ver
-                context.ids_virtual_sell_target_info_dict[k].sold_mv = context.ids_virtual_sell_target_info_dict[k].sold_price * v[0]
-                mv_limit_ver = context.ids_virtual_sell_target_info_dict[k].sold_mv
-            elif (fpr_limit_ver < context.Sell_Loss_Limit) and (v[1]):
-                price_limit_ver = v[2]
-                context.ids_virtual_sell_target_info_dict[k].sold_flag = True
-                context.ids_virtual_sell_target_info_dict[k].sold_price = price_limit_ver
-                context.ids_virtual_sell_target_info_dict[k].sold_mv = context.ids_virtual_sell_target_info_dict[k].sold_price * v[0]
-                mv_limit_ver = context.ids_virtual_sell_target_info_dict[k].sold_mv
-        else:
-            mv_limit_ver = context.ids_virtual_sell_target_info_dict[k].sold_mv
-
-        cur_market_value_limit_ver += mv_limit_ver
-    save_statistics_info(context)
-
-        
-    # 这里的日志输出也行分为版本1和2--------
-
-    # 现在策略AB不能公用一套整体盈利的计算了，B这边要简单一些，就是用目前的总市值除记录的持仓市值就可以
-    # B不存在今天没有卖掉的，不用分块考虑，即便有，占比也可以忽略，A的话就不行了，还要考虑去掉今天买入的部分
-    # 版本1统计：不含止损止盈
-    total_float_profit_rate = ((cur_market_value - context.total_market_value_for_all_sell) / context.total_market_value_for_all_sell) if context.total_market_value_for_all_sell != 0 else 0
-    context.statistics.cur_fpr = total_float_profit_rate
-    if valid_tfpr_flag and (total_float_profit_rate > context.statistics.highest_total_fpr):
-        if (context.statistics.highest_total_fpr < 0.0065) and (total_float_profit_rate > 0.0065):
-            log(f"[statistics]突破0.65--------")
-        context.statistics.highest_total_fpr = total_float_profit_rate
-        context.statistics.highest_total_fpr_time = context.now
-        save_statistics_info(context)
-        log(f"[statistics]最高:{round(context.statistics.highest_total_fpr * 100, 3)}%, {context.now}")
-        #log(f"[debug]cur_mv[{cur_market_value}] total_mv[{context.total_market_value_for_all_sell}] sell_pos_dict_len[{len(context.sell_pos_dict)}] debug_count[{debug_count}]")
-    if valid_tfpr_flag and (total_float_profit_rate < context.statistics.lowest_total_fpr):
-        context.statistics.lowest_total_fpr = total_float_profit_rate
-        context.statistics.lowest_total_fpr_time = context.now
-        save_statistics_info(context)
-        log(f"[statistics]最低:{round(context.statistics.lowest_total_fpr * 100, 3)}%, {context.now}")
-        if context.statistics.lowest_total_fpr < -0.05:
-            log(f"[debug]cur_mv[{cur_market_value}] total_mv[{context.total_market_value_for_all_sell}] sell_pos_dict_len[{len(context.sell_pos_dict)}] debug_count[{debug_count}]")
-
-    now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
-    target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
-    if (now >= target_time) and (context.statistics.highest_total_fpr < 1.0):
-
-        # 在版本1中，输出所有标的当天最高和最低盈利情况
-        for k,v in context.statistics.max_min_info_dict.items():
-            log(f"[statistics][{k}]最高：[{round(v.max * 100, 3)}%]，最低：[{round(v.min * 100, 3)}%]")
-
-        # 输出精确盈利（就是用(卖出后的mv - 卖出标的的成本mv) / 总成本mv，再减去0.13%的手续费，按理说应该是比较精确的）
-        # 注意手续费的0.13%是针对交易额的，并不能固定去减这个值，除非是全部资金，那就可以直接减
-        # 这样统计的话，就和总资金没有什么关系了
-        # 注意两个结构体并没有什么关系（sell_pos_dict和ids_virtual_sell_info_dict）
-        # 主要是因为之前保存文件的关系，没有统一结构体
-        cur_mv = 0 # 当天卖出后的票的mv（有可能比持仓成本高或者低）
-        vwap_mv = 0 # 当天卖出的票的成本mv（用于和cur_mv一起计算当天的盈利值）
-        total_mv = 0 # 用于统计当天所有需要卖出的总mv（不是总资金，总资金一直在变化，不用它）
-        for k,v in context.sell_pos_dict.items():
-            if k not in context.ids_virtual_sell_target_info_dict.keys():
-                continue
-            if v[1]:
-                cur_mv += (v[0] * v[2])
-                vwap_mv += (v[0] * context.ids_virtual_sell_target_info_dict[k].vwap)
-
-            # context.total_market_value_for_all_sell，用这个值也是可以的
-            # 不过我看了，sell_pos_dict也是会存文件的，所以这样写也没有问题，不会因为中途关闭出问题
-            total_mv += (v[0] * context.ids_virtual_sell_target_info_dict[k].vwap)
-
-        accurate_float_profit = (cur_mv - (cur_mv * 0.0013) - vwap_mv) / (total_mv) if total_mv != 0 else 0
-        log(f"\n[statistics][单卖可统计]今日最终精确整体盈利为：{round(accurate_float_profit * 100, 3)}%\n")
-
-        log(f"[statistics]今日最高整体盈利为：{round(context.statistics.highest_total_fpr * 100, 3)}%，出现时间为：{context.statistics.highest_total_fpr_time}")
-        context.statistics.highest_total_fpr = 2.0
-    if (now >= target_time) and (context.statistics.lowest_total_fpr >= -1.0):
-        log(f"[statistics]今日最低整体盈利为：{round(context.statistics.lowest_total_fpr * 100, 3)}%，出现时间为：{context.statistics.lowest_total_fpr_time}")
-        context.statistics.lowest_total_fpr = -2.0
-
-    # 版本2统计：止损止盈虚拟统计版本
-    total_float_profit_rate_limit_ver = ((cur_market_value_limit_ver - context.total_market_value_for_all_sell) / context.total_market_value_for_all_sell) if context.total_market_value_for_all_sell != 0 else 0
-    context.statistics.cur_fpr_limit_ver = total_float_profit_rate_limit_ver
-    if valid_tfpr_flag and (total_float_profit_rate_limit_ver > context.statistics.highest_total_fpr_limit_ver):
-        if (context.statistics.highest_total_fpr_limit_ver < 0.0065) and (total_float_profit_rate_limit_ver > 0.0065):
-            log(f"[statistics][止]突破0.65--------")
-        context.statistics.highest_total_fpr_limit_ver = total_float_profit_rate_limit_ver
-        context.statistics.highest_total_fpr_time_limit_ver = context.now
-        save_statistics_info(context)
-        print(f"[statistics][止]最高:{round(context.statistics.highest_total_fpr_limit_ver * 100, 3)}%, {context.now}")
-    if valid_tfpr_flag and (total_float_profit_rate_limit_ver < context.statistics.lowest_total_fpr_limit_ver):
-        context.statistics.lowest_total_fpr_limit_ver = total_float_profit_rate_limit_ver
-        context.statistics.lowest_total_fpr_time_limit_ver = context.now
-        save_statistics_info(context)
-        print(f"[statistics][止]最低:{round(context.statistics.lowest_total_fpr_limit_ver * 100, 3)}%, {context.now}")
-
-    if (now >= target_time) and (context.statistics.highest_total_fpr_limit_ver <= 1.0):
-        log(f"[statistics][止]今日最高整体盈利为：{round(context.statistics.highest_total_fpr_limit_ver * 100, 3)}%，出现时间为：{context.statistics.highest_total_fpr_time_limit_ver}")
-        context.statistics.highest_total_fpr_limit_ver = 2.0
-    if (now >= target_time) and (context.statistics.lowest_total_fpr_limit_ver >= -1.0):
-        log(f"[statistics][止]今日最低整体盈利为：{round(context.statistics.lowest_total_fpr_limit_ver * 100, 3)}%，出现时间为：{context.statistics.lowest_total_fpr_time_limit_ver}")
-        context.statistics.lowest_total_fpr_limit_ver = -2.0
-
-        log(f"平仓时间[{context.record_sell_time}] 平仓时的瞬间整体盈利[{round(context.record_sell_tfpr * 100, 3)}%]")
-
-        market_value = context.account().cash['market_value'] # 市值，因为之前好像出现了统计错误，这里记录下收盘后的市值，有需要可以核算
-        log(f"收盘后的持仓市值为：{market_value}")
-        
-        # 3点的时候重置整个sell相关的信息，主要是配置文件中的mv改到-1，这个核心值可以控制整个卖出流程
-        context.total_market_value_for_all_sell = 0 # 只记录一次就ok
-        over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
-        over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
-        auto_generate_sell_list_with_ids_file(context)
 
 def on_tick(context, tick):
+    if context.tick_count_for_statistics == 0:        
+        context.record_time = time.time()
+        
     context.tick_count_for_statistics += 1
     if context.test_info == 1:
         print(f'---------on_tick({tick.symbol})---------')
@@ -1476,11 +1362,11 @@ def on_tick(context, tick):
             context.ids_buy_target_info_dict[tick.symbol].first_record_flag = True
         # else:
         #     print(f"potential [buy]price error, == 0, [{tick.symbol}]")
-    if context.ids[tick.symbol].buy_flag == 0:
-        # 为什么这里判断大于0，因为这个订阅很扯，9点30之前有些票会给你发价格0过来，3点以后有些之前有效的票，也会发0给你，所以必须判断
-        if tick.price > 0:
-            context.ids_virtual_sell_target_info_dict[tick.symbol].price = tick.price
-            context.ids_virtual_sell_target_info_dict[tick.symbol].first_record_flag = True
+    # if context.ids[tick.symbol].buy_flag == 0:
+    #     # 为什么这里判断大于0，因为这个订阅很扯，9点30之前有些票会给你发价格0过来，3点以后有些之前有效的票，也会发0给你，所以必须判断
+    #     if tick.price > 0:
+    #         context.ids_virtual_sell_target_info_dict[tick.symbol].price = tick.price
+    #         context.ids_virtual_sell_target_info_dict[tick.symbol].first_record_flag = True
 
     # 根据设置的tick handle frequence来跳过tick的处理
     # context.ids[tick.symbol].tick_cur_count += 1
@@ -1501,26 +1387,25 @@ def on_tick(context, tick):
         if record_all:
             context.get_all_buy_price_flag = True
 
-    invalid_sell_symbol = ""
-    if (not context.get_all_sell_price_flag):
-        record_all = True
-        for k,v in context.ids_virtual_sell_target_info_dict.items():
-            # 这里用过first_record_flag比较，但是不行，验证发现price第一次记录了也很可能是0，原因不明
-            # 使用还是必须要用price，否则就会出现之前刚刚开盘统计数据最低就到-4，-5，甚至更低，就是因为好几只票，明明有价格，但是第一次进来给的0
-            if v.price == 0:
-                invalid_sell_symbol = k
-                record_all = False
-                break
-        if record_all:
-            context.get_all_sell_price_flag = True
+    # invalid_sell_symbol = ""
+    # if (not context.get_all_sell_price_flag):
+    #     record_all = True
+    #     for k,v in context.ids_virtual_sell_target_info_dict.items():
+    #         # 这里用过first_record_flag比较，但是不行，验证发现price第一次记录了也很可能是0，原因不明
+    #         # 使用还是必须要用price，否则就会出现之前刚刚开盘统计数据最低就到-4，-5，甚至更低，就是因为好几只票，明明有价格，但是第一次进来给的0
+    #         if v.price == 0:
+    #             invalid_sell_symbol = k
+    #             record_all = False
+    #             break
+    #     if record_all:
+    #         context.get_all_sell_price_flag = True
 
     # 更新缓存价格，在外面更新，里面return的条件太多了，这样更新的价格，statistics也可以用
     if context.tick_count_for_statistics >= len(context.ids):
-        # 检测未结委托，超时的话，无论原因都应该撤单重新操作
-        # info_statistics(context, tick)
         context.tick_count_for_statistics = 0
+        print(f"目前整个监控全部循环({len(context.ids)})一次耗时: {time.time() - context.record_time:.4f} s")
         if invalid_buy_symbol != "":
-            print(f"卖出列表中存在无法获取price的情况[{invalid_buy_symbol}]，等待一段时间（30s）后仍然无法获取到的，需要从配置列表中删除，删除后手动重置配置文件中的mv到-1，然后再刷新")
+            print(f"卖出列表中存在无法获取price的情况[{invalid_buy_symbol}]，等待一段时间（30s）后仍然无法获取到的，说明该标的存在某些异常，但是对于监控脚本可以不进行处理")
         if context.test_info == 1:
             print(f"trade logic cost time with count limit------: {time.time() - t:.4f} s")
 
@@ -1538,21 +1423,20 @@ def on_tick(context, tick):
             context.tick_count_for_buy_ok = True
         else:
             context.tick_count_for_buy_ok = False
-    if context.get_all_sell_price_flag:
-        context.tick_count_for_sell += 1
-        if (context.tick_count_for_sell > (len(context.ids) * context.tick_count_limit_rate_for_sell)):
-            context.tick_count_for_sell_ok = True
-        else:
-            context.tick_count_for_sell_ok = False
+    # if context.get_all_sell_price_flag:
+    #     context.tick_count_for_sell += 1
+    #     if (context.tick_count_for_sell > (len(context.ids) * context.tick_count_limit_rate_for_sell)):
+    #         context.tick_count_for_sell_ok = True
+    #     else:
+    #         context.tick_count_for_sell_ok = False
             
-    if (not context.get_all_buy_price_flag):
-        print(f"目前尚未获得所有")
+    # if (not context.get_all_buy_price_flag):
+    #     print(f"目前尚未获得所有")
 
     # 根据不同策略尝试买卖--------
     # 策略B（对冲整体买卖策略，不存在单只处理）
-    if (context.strategy_info.M == 1):
-        if (context.ids[tick.symbol].buy_flag == 1) and (context.get_all_buy_price_flag):
-            monitor_center(context, tick)
+    if (context.strategy_info.M == 1) and (context.ids[tick.symbol].buy_flag == 1):
+        monitor_center(context, tick)
     else:
         print(f"[error] enter trade strategy failed, this should never happen")
 
@@ -1565,17 +1449,6 @@ def on_tick(context, tick):
 
     if context.test_info == 1:
         print(f"trade logic cost time: {time.time() - t:.4f} s")
-
-    #info = get_instruments(symbols = tick.symbol, df = True)
-    # id就是不带前缀（XXSE.）的6位代码
-    #print(f"代码{info.symbol} 名称{info.sec_name} id{info.sec_id}")
-
-    # ！！！下面是典型的错误代码，tick已经是订阅后激活的了（是回调函数，订阅以后都有回调），tick的信息中有我所有订阅的股票，不应该在这里循环自己去调用
-    # 每只股票会有单独的tick被触发（订阅后）
-    '''
-    for id in context.ids:
-        try_buy(context, tick)
-    '''
 
 
 # 委托执行回报事件

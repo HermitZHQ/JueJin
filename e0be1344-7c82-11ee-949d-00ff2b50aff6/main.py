@@ -165,7 +165,9 @@ def refresh(context):
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
+    t = time.time()
     buy_num = 0
+    handled_num = 0 # 用于计算初始化进度
     context.ids_buy = []
     context.ids_sell = []
     for k, v in context.ids.items():
@@ -203,6 +205,9 @@ def refresh(context):
                 context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             if k not in context.statistics.max_min_info_dict.keys():
                 context.statistics.max_min_info_dict[k] = MaxMinInfo()
+        handled_num += 1
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -693,9 +698,10 @@ def on_parameter(context, parameter):
         context.test_info = parameter.value
         refresh_statistics_info(context)
         if context.test_info == 99:
-            over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
-            over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
-            auto_generate_sell_list_with_ids_file(context)
+            # over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
+            # over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
+            # auto_generate_sell_list_with_ids_file(context)
+            output_final_statistics(context)
     elif (parameter.key == 'Refresh'):
         log("重新载入ids，重新订阅！")
         refresh(context)
@@ -842,9 +848,10 @@ def init(context):
     context.Sell_All_Increase_Rate = 0.2
     context.sell_all_chase_raise_flag = False
     context.sell_all_chase_highest_record = -1.0
-    context.sell_all_lower_limit = 0.0066
+    context.default_sell_all_increase_rate = 0.007
+    context.sell_all_lower_limit = context.default_sell_all_increase_rate
     if context.strategy_info.B == 1:
-        context.Sell_All_Increase_Rate = 0.0066
+        context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
     elif context.strategy_info.BA == 1:
         context.Sell_All_Increase_Rate = 0.0045
     elif context.strategy_info.A == 1:
@@ -863,7 +870,9 @@ def init(context):
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
+    t = time.time()
     buy_num = 0
+    handled_num = 0 # 用于显示处理进度
     context.ids_buy = []
     context.ids_sell = []
     for k, v in context.ids.items():
@@ -899,6 +908,9 @@ def init(context):
             context.ids_sell.append(k)
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
+        handled_num += 1
+        print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
+    print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
 
@@ -1215,8 +1227,13 @@ def try_buy_strategyA(context, tick):
         curHolding = pos.volume_today if (side_type == OrderSide_Buy) else pos.available_now
         #print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
 
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
+
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -1461,9 +1478,6 @@ def try_buy_strategyA(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -1726,7 +1740,6 @@ def try_sell_strategyA(context, tick):
 
 
 def try_buy_strategyB(context, tick):
-
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
         #print(f'{tick.symbol}订单没有处理完毕，直接返回')
@@ -1743,8 +1756,13 @@ def try_buy_strategyB(context, tick):
         curHolding = pos.volume_today if (side_type == OrderSide_Buy) else pos.available_now
         #print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
 
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
+
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -1986,9 +2004,6 @@ def try_buy_strategyB(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2271,8 +2286,13 @@ def try_buy_strategyB1(context, tick):
         curHolding = pos.volume_today if (side_type == OrderSide_Buy) else pos.available_now
         #print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
 
+    if tick.symbol not in context.ids_buy_target_info_dict.keys():
+        return
+
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -2517,9 +2537,6 @@ def try_buy_strategyB1(context, tick):
         # 指定买入量的话，则只买入设置的量
         if context.ids[tick.symbol].buy_with_num != 0:
             buyBaseNum = (int)(context.ids[tick.symbol].buy_with_num / 100)
-            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
-            context.ids[tick.symbol].buy_with_num = 0
-            context.ids[tick.symbol].buy_with_num_handled_flag = True
         list_order = order_volume(symbol=tick.symbol, volume=buyBaseNum * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         #print(f"list order:{list_order}")
         
@@ -2784,6 +2801,65 @@ def try_sell_strategyB1(context, tick):
 def on_bar(context, bars):
     print('---------on_bar---------')
     # print(bars)
+    
+def output_final_statistics(context):
+    
+    now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
+    target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
+    if (context.test_info) == 99 and (now >= target_time):
+        log(f"调试盘终输出：highest_total_fpr:{context.statistics.highest_total_fpr} lowest_total_fpr:{context.statistics.lowest_total_fpr}")
+    if (now >= target_time):
+
+        # 在版本1中，输出所有标的当天最高和最低盈利情况
+        for k,v in context.statistics.max_min_info_dict.items():
+            log(f"[statistics][{k}]最高：[{round(v.max * 100, 3)}%]，最低：[{round(v.min * 100, 3)}%]")
+
+        # 输出精确盈利（就是用(卖出后的mv - 卖出标的的成本mv) / 总成本mv，再减去0.13%的手续费，按理说应该是比较精确的）
+        # 注意手续费的0.13%是针对交易额的，并不能固定去减这个值，除非是全部资金，那就可以直接减
+        # 这样统计的话，就和总资金没有什么关系了
+        # 注意两个结构体并没有什么关系（sell_pos_dict和ids_virtual_sell_info_dict）
+        # 主要是因为之前保存文件的关系，没有统一结构体
+        cur_mv = 0 # 当天卖出后的票的mv（有可能比持仓成本高或者低）
+        vwap_mv = 0 # 当天卖出的票的成本mv（用于和cur_mv一起计算当天的盈利值）
+        total_mv = 0 # 用于统计当天所有需要卖出的总mv（不是总资金，总资金一直在变化，不用它）
+        for k,v in context.sell_pos_dict.items():
+            if k not in context.ids_virtual_sell_target_info_dict.keys():
+                continue
+            if v[1]:
+                cur_mv += (v[0] * v[2])
+                vwap_mv += (v[0] * context.ids_virtual_sell_target_info_dict[k].vwap)
+
+            # context.total_market_value_for_all_sell，用这个值也是可以的
+            # 不过我看了，sell_pos_dict也是会存文件的，所以这样写也没有问题，不会因为中途关闭出问题
+            total_mv += (v[0] * context.ids_virtual_sell_target_info_dict[k].vwap)
+
+        accurate_float_profit = (cur_mv - (cur_mv * 0.0013) - vwap_mv) / (total_mv) if total_mv != 0 else 0
+        log(f"\n[statistics][单卖可统计]今日最终精确整体盈利为：{round(accurate_float_profit * 100, 3)}%\n")
+
+        log(f"[statistics]今日最高整体盈利为：{round(context.statistics.highest_total_fpr * 100, 3)}%，出现时间为：{context.statistics.highest_total_fpr_time}")
+        context.statistics.highest_total_fpr = 2.0
+    if (now >= target_time):
+        log(f"[statistics]今日最低整体盈利为：{round(context.statistics.lowest_total_fpr * 100, 3)}%，出现时间为：{context.statistics.lowest_total_fpr_time}")
+        context.statistics.lowest_total_fpr = -2.0
+
+    # 版本2统计：止损止盈虚拟统计版本
+    if (now >= target_time):
+        log(f"[statistics][止]今日最高整体盈利为：{round(context.statistics.highest_total_fpr_limit_ver * 100, 3)}%，出现时间为：{context.statistics.highest_total_fpr_time_limit_ver}")
+        context.statistics.highest_total_fpr_limit_ver = 2.0
+    if (now >= target_time):
+        log(f"[statistics][止]今日最低整体盈利为：{round(context.statistics.lowest_total_fpr_limit_ver * 100, 3)}%，出现时间为：{context.statistics.lowest_total_fpr_time_limit_ver}")
+        context.statistics.lowest_total_fpr_limit_ver = -2.0
+
+        log(f"平仓时间[{context.record_sell_time}] 平仓时的瞬间整体盈利[{round(context.record_sell_tfpr * 100, 3)}%]")
+
+        market_value = context.account().cash['market_value'] # 市值，因为之前好像出现了统计错误，这里记录下收盘后的市值，有需要可以核算
+        log(f"收盘后的持仓市值为：{market_value}")
+        
+        # 3点的时候重置整个sell相关的信息，主要是配置文件中的mv改到-1，这个核心值可以控制整个卖出流程
+        context.total_market_value_for_all_sell = 0 # 只记录一次就ok
+    over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
+    over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
+    auto_generate_sell_list_with_ids_file(context)
 
 def info_statistics(context, tick):
     # 数据统计中的总市值不能再用账号的总市值了，因为都卖完以后，就不会变化了，但我们其实是想监控标的在3点前的最高整体盈利（时间）
@@ -2920,17 +2996,19 @@ def info_statistics(context, tick):
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
             if context.strategy_info.B == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
             elif context.strategy_info.BA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
             elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
     target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
+    if (context.test_info) == 6 and (now >= target_time):
+        log(f"调试盘终输出：highest_total_fpr:{context.statistics.highest_total_fpr} lowest_total_fpr:{context.statistics.lowest_total_fpr}")
     if (now >= target_time) and (context.statistics.highest_total_fpr < 1.0):
 
         # 在版本1中，输出所有标的当天最高和最低盈利情况
@@ -3060,10 +3138,25 @@ def on_tick(context, tick):
         if record_all:
             context.get_all_sell_price_flag = True
 
+    # 检测tick_count_for_statistics是否在收盘后出现了，次数累加不够的情况？？
+    if (context.test_info) == 6:
+        log(f"目前tick_count_for_statistics:{context.tick_count_for_statistics} len of ids:{len(context.ids)}")
+
     # 更新缓存价格，在外面更新，里面return的条件太多了，这样更新的价格，statistics也可以用
     if context.tick_count_for_statistics >= len(context.ids):
         # 检测未结委托，超时的话，无论原因都应该撤单重新操作
         check_unfinished_orders(context, tick)
+        
+        # 调试信息：有时候会偶尔出现不输出盘终总结的情况
+        if (context.test_info) == 6:
+            now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
+            target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
+            if now >= target_time:
+                log(f"已到盘终总结输出测试点01，且时间满足")
+            else:
+                log(f"已到盘终总结输出测试点01，但时间为满足条件")
+
+
         info_statistics(context, tick)
         context.tick_count_for_statistics = 0
         if invalid_sell_symbol != "":
@@ -3216,6 +3309,11 @@ def on_order_status(context, order):
             context.ids_buy_target_info_dict[order.symbol].total_holding += order.filled_volume
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
+            
+            # 只买入一次，这里重置buy_with_num为0，防止连续买入指定数量（除非后续刷新，且配置仍然存在）
+            if (context.ids[order.symbol].buy_with_num != 0):
+                context.ids[order.symbol].buy_with_num = 0
+                context.ids[order.symbol].buy_with_num_handled_flag = True
             
 
     # [MAYBE TODO]订单部分成交的话（status == 2），暂不消除订单记录--------
