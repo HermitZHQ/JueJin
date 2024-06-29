@@ -1308,7 +1308,7 @@ class TestClientUI(QMainWindow):
 
                 if item != None and item.eob != None:
                 
-                    # print(f"{item}")
+                    # print(f"{item.symbol}::{item.eob}")
 
                     temp_current_time_arr = item.eob.split(" ")
                     temp_c_hour_arr = temp_current_time_arr[1].split("+")
@@ -1794,16 +1794,21 @@ class ReciveQThread(QThread):
 
                     for key, value in thtd_dic.items():
                        
-                    #    print(f"{key}:::{value.symbol}")
+                    #    print(f"{key}:::{value.symbol}::{value.eob}")
 
                        if value.symbol not in main_window.history_today_all_dic.keys():
                            
-                            temp_history_time_arr = value.eob.split(" ")
-                            temp_h_hour_arr = temp_history_time_arr[1].split("+")
+                            #当日历史数据不需要分割时间, 测试没有问题后，再删除注释掉的代码
+                            # temp_today_history_time_arr = value.eob.split(" ")
+                            # temp_h_hour_arr = temp_today_history_time_arr[1].split("+")
 
                             temp_dic = {}
-                            shdf_dic[key].eob = temp_h_hour_arr[0]
-                            temp_dic[temp_h_hour_arr[0]] = value
+
+                            # thtd_dic[key].eob = temp_h_hour_arr[0] #shdf_dic
+                            # temp_dic[temp_h_hour_arr[0]] = value
+
+                            thtd_dic[key].eob = value.eob #shdf_dic
+                            temp_dic[value.eob] = value
 
                             main_window.history_today_all_dic[value.symbol] = temp_dic
 
@@ -1811,11 +1816,15 @@ class ReciveQThread(QThread):
                        else:
                             #这里遍历出每一个标的代码对应的此刻时段之前的所有历史数据，数据类型是 一个key对应一个dic
 
-                            temp_history_time_arr = value.eob.split(" ")
-                            temp_h_hour_arr = temp_history_time_arr[1].split("+")
+                            #当日历史数据不需要分割时间, 测试没有问题后，再删除注释掉的代码
+                            # temp_today_history_time_arr = value.eob.split(" ")
+                            # temp_h_hour_arr = temp_today_history_time_arr[1].split("+")
 
-                            shdf_dic[key].eob = temp_h_hour_arr[0]
-                            main_window.history_today_all_dic[value.symbol][temp_h_hour_arr[0]] = value
+                            # thtd_dic[key].eob = temp_h_hour_arr[0] #shdf_dic
+                            # main_window.history_today_all_dic[value.symbol][temp_h_hour_arr[0]] = value
+
+                            thtd_dic[key].eob = value.eob #shdf_dic
+                            main_window.history_today_all_dic[value.symbol][value.eob] = value
 
                     #注意，客户端实在接受完昨日历史数据，就开始进行初始化UI，可能会发生，这里还在接收，UI就在初始化，后面可能会出问题
                     #如果出问题，就把101里的初始化UI搬这里来
