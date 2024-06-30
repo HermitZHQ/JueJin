@@ -58,6 +58,7 @@ def init(context):
     context.operation_id_send = 0
     context.operation_id_recive = 0
     context.symbol_str = ''
+    context.delelte_ready_for_send = None
 
     context.subscription_stock_arr = []
     context.mac_address_arr = []
@@ -545,7 +546,6 @@ def on_tick(context, tick):
 
             #             context.test_next_second_data_time = now_time_m
             
-
             if context.socket_dic:
                 for k,v in context.socket_dic.items():
 
@@ -575,10 +575,10 @@ def on_tick(context, tick):
                                     if ready_data['symbol'] == second_data['symbol']:
                                         if ready_data['eob'] == second_data['eob']:
                                             print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
-                                            pass
                                         else:
                                             send_message_second_method(v, context)
-                                    break
+                                        #这里将break tab了一下，不知道会不会有啥问题，看看先    
+                                        break
 
                                 # send_message_second_method(v, context)
                             context.ready_for_send.clear()
@@ -595,13 +595,55 @@ def on_tick(context, tick):
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
                         send_message_second_method(v, context)
 
-
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
                         for data_key, data_value in context.cur_data_dic.items():
                             temp_ready_for_send_data = data_value
-                            context.ready_for_send.append(temp_ready_for_send_data)
+                            # context.ready_for_send.append(temp_ready_for_send_data)
+
+                            #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
+                            for find_symbol_data in context.ready_for_send:
+                                # print(f"this in find:::{find_symbol_data['symbol']}::{find_symbol_data['amount']}::{find_symbol_data['eob']}")
+
+                                if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
+                                    #获得当前数据的当前分钟
+                                    temp_cur_data_time = temp_ready_for_send_data['eob']
+
+                                    get_A_time_arr = temp_cur_data_time.split("+")
+                                    get_A_time_arr_1 = get_A_time_arr[0].split(" ")
+                                    get_A_time_arr_2 = get_A_time_arr_1[1].split(":")
+
+                                    get_A_min = get_A_time_arr_2[1]
+
+                                    #获得在集合中数据的当前分钟
+                                    temp_in_list_data_time = find_symbol_data['eob']
+
+                                    get_B_time_arr = temp_in_list_data_time.split("+")
+                                    get_B_time_arr_1 = get_B_time_arr[0].split(" ")
+                                    get_B_time_arr_2 = get_B_time_arr_1[1].split(":")
+
+                                    get_B_min = get_B_time_arr_2[1]
+
+                                    print(f"A::{get_A_min}---B::{get_B_min}")
+
+                                    if get_A_min == get_B_min:
+                                        temp_delete_amount = find_symbol_data['amount']
+                                        temp_now_amount = temp_ready_for_send_data['amount']
+                                        #当前分钟内同一只标的，数据相加
+                                        temp_adding_amount = round(float(temp_delete_amount), 2) + round(float(temp_now_amount), 2)
+
+                                        #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
+                                        find_symbol_data['amount'] = str(temp_adding_amount)
+                                        find_symbol_data['eob'] = temp_ready_for_send_data['eob']
+                                        break
+                                    else:
+                                        context.ready_for_send.append(temp_ready_for_send_data)
+                                        break
+
+                                else:
+                                    context.ready_for_send.append(temp_ready_for_send_data)
+                                    break
 
                         print(f"ready_for_send length:{len(context.ready_for_send)}")
                         
