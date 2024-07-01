@@ -15,6 +15,7 @@ import re
 import uuid
 
 OP_ID_C2S_QUICK_BUY = 120
+OP_ID_C2S_QUICK_SELL = 121
 
 class AnalysisHistoryData():
     def __init__(self, symbol, amount, eob, name):
@@ -219,7 +220,7 @@ class TestClientUI(QMainWindow):
         else:
             buy_id = int(input_box_str)
         
-        reply = QMessageBox.question(None, '确认', f'您确定要急速买入标的[{buy_id}]-[{buy_amount}]w吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = QMessageBox.question(None, '确认', f'您确定要急速买入标的[{buy_id}]---[{buy_amount}]w吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
         
@@ -233,6 +234,24 @@ class TestClientUI(QMainWindow):
         # 买入金额用int16即可，可达到65536w，已经非常大了不可能超过，这样可节约2个字节
         client_socket.sendall(OP_ID_C2S_QUICK_BUY.to_bytes(4) + int(buy_id).to_bytes(4) + np.int16(buy_amount).tobytes())
         # print(f"search text:{buy_id}")
+        
+    # 向服务发送急速买入的命令
+    def send_to_server_quick_sell(self, client_socket):
+        input_box_str = self.input_box_search.text()
+        if len(input_box_str) != 6:
+            print(f"急速卖出的标的ID长度不正常，正常长度应该等于6位！请检查，目前内容为：[{input_box_str}]")
+            return
+        
+        buy_id = int(input_box_str)
+        reply = QMessageBox.question(None, '确认', f'您确定要急速卖出标的[{buy_id}]吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        
+        print(f"开始尝试急速卖出标的[{buy_id}]")
+        
+        # 4 + 4 = 8字节
+        # 标的必须用int，4字节
+        client_socket.sendall(OP_ID_C2S_QUICK_SELL.to_bytes(4) + int(buy_id).to_bytes(4))
         
 
     #初始化所有容器
@@ -259,10 +278,17 @@ class TestClientUI(QMainWindow):
         
         # 添加按钮支持急速买入
         btn_quick_buy = QPushButton(self)
-        btn_quick_buy.setText("急速买入")
-        btn_quick_buy.setFixedSize(QSize(120, 35))
+        btn_quick_buy.setText("买入")
+        btn_quick_buy.setFixedSize(QSize(60, 30))
         btn_quick_buy.pressed.connect(lambda: self.w1_quick_buy())
         self.w1.top_function_widget_layout.addWidget(btn_quick_buy)
+        
+        # 添加按钮支持急速卖出
+        btn_quick_sell = QPushButton(self)
+        btn_quick_sell.setText("卖出")
+        btn_quick_sell.setFixedSize(QSize(60, 30))
+        btn_quick_sell.pressed.connect(lambda: self.w1_quick_sell())
+        self.w1.top_function_widget_layout.addWidget(btn_quick_sell)
 
         #1分钟实时数据
         self.w2 = InitChildQwidGet()
@@ -407,6 +433,10 @@ class TestClientUI(QMainWindow):
     # w1中，添加的急速买入按钮功能
     def w1_quick_buy(self):
         self.send_to_server_quick_buy(self.client_socket)
+        
+    # w1中，添加的急速买入按钮功能
+    def w1_quick_sell(self):
+        self.send_to_server_quick_sell(self.client_socket)
 
     def create_new_window(self, title, w_num):
         return ScrollableLabels(title, w_num)
