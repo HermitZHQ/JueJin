@@ -1484,6 +1484,7 @@ class ReciveClientThreadC(threading.Thread):
         print(f"准备开始处理急速购买标的[{str_symbol}]-[{buy_amount}]w")
         base_num = 1
         # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
+        # TODO:科创至少200
         if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].price > 0):
             buy_in_num = math.floor(buy_amount * 10000 / self.context.ids_info_dict[str_symbol].price)
             base_num = math.floor(buy_in_num / 100)
