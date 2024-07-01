@@ -16,7 +16,7 @@ import subprocess
 import math
 
 global_i = 0
-str_strategy = 'VDebug'
+str_strategy = 'VDebugBuy'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path_a1 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A1.txt'
 ids_path_a2 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A2.txt'
@@ -25,7 +25,7 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-section_history_stock_count = 3
+section_history_stock_count = 1
 
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
@@ -111,7 +111,7 @@ def init(context):
 
     # 线程Server 正式服12345, 调试服12346   3
     # 这个是新版新版新版新版新版新版
-    main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
+    main_server_thread = MainServerTreadC("0.0.0.0", 12347, context)
     main_server_thread.start()
 
     # 关盘后，模拟on_bar用
@@ -588,14 +588,15 @@ def on_tick(context, tick):
                                 #这里需要遍历ready_second_for_send,查看是否有重复数据
                                 for second_data in context.ready_second_for_send:
                                     if ready_data['symbol'] == second_data['symbol']:
-                                        if ready_data['eob'] != second_data['eob']:
+                                        if ready_data['eob'] == second_data['eob']:
+                                            print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
+                                        else:
                                             send_message_second_method(v, context)
                                         #这里将break tab了一下，不知道会不会有啥问题，看看先    
                                         break
 
-                        if len(context.ready_for_send) > 0:
+                                # send_message_second_method(v, context)
                             context.ready_for_send.clear()
-                        if len(context.ready_second_for_send) > 0:
                             context.ready_second_for_send.clear()
 
                         #用于测试1分钟内，tick掉的数据，暂时不用了
@@ -605,7 +606,7 @@ def on_tick(context, tick):
                         #     print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
                         #     send_message_second_method(v, context)
 
-                        context.cur_data_dic.clear() 
+                        context.cur_data_dic.clear()
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
                         send_message_second_method(v, context)
 
@@ -614,13 +615,11 @@ def on_tick(context, tick):
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
                         for data_key, data_value in context.cur_data_dic.items():
                             temp_ready_for_send_data = data_value
-
-                            temp_index = 0
+                            # context.ready_for_send.append(temp_ready_for_send_data)
 
                             #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
                             for find_symbol_data in context.ready_for_send:
-
-                                temp_index += 1
+                                # print(f"this in find:::{find_symbol_data['symbol']}::{find_symbol_data['amount']}::{find_symbol_data['eob']}")
 
                                 if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
                                     #获得当前数据的当前分钟
@@ -641,8 +640,9 @@ def on_tick(context, tick):
 
                                     get_B_min = get_B_time_arr_2[1]
 
-                                    if get_A_min == get_B_min:
+                                    print(f"A::{get_A_min}---B::{get_B_min}")
 
+                                    if get_A_min == get_B_min:
                                         temp_delete_amount = find_symbol_data['amount']
                                         temp_now_amount = temp_ready_for_send_data['amount']
                                         #当前分钟内同一只标的，数据相加
@@ -651,11 +651,14 @@ def on_tick(context, tick):
                                         #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
                                         find_symbol_data['amount'] = str(temp_adding_amount)
                                         find_symbol_data['eob'] = temp_ready_for_send_data['eob']
-
+                                        break
+                                    else:
+                                        context.ready_for_send.append(temp_ready_for_send_data)
                                         break
 
-                            if temp_index == len(context.ready_for_send):
-                                context.ready_for_send.append(temp_ready_for_send_data)    
+                                else:
+                                    context.ready_for_send.append(temp_ready_for_send_data)
+                                    break
 
                         print(f"ready_for_send length:{len(context.ready_for_send)}")
                         
@@ -695,9 +698,9 @@ def on_bar(context, bars):
 def test_get_data(context):
 
     yesterday_date = get_previous_or_friday_date()
-    s_time = str(yesterday_date) + ' 9:15:0'
+    s_time = str(yesterday_date) + ' 9:30:0'
     e_time = str(yesterday_date) + ' 15:00:0'
-    test_s_time = '2024-06-07' + ' 9:15:0'
+    test_s_time = '2024-06-07' + ' 9:30:0'
     test_e_time = '2024-06-07' + ' 15:00:0'
 
     print(f"{s_time} To {e_time}")
@@ -1254,75 +1257,7 @@ def load_mac_address(context):
                     if len(str_tmp) > 0:
                         context.mac_address_arr.append(str_tmp)
                         
-def translate_letter_to_int(context, str_letter):
 
-    # str_num = str(num)  
-    # # 使用列表推导式和字符串切片来拆解字符串  
-    # chunks = [str_num[i:i+2] for i in range(0, len(str_num), 2)]  
-    # # 如果需要，可以将子字符串再转回整数（但在这个例子中，我们保持它们为字符串）  
-    # # int_chunks = [int(chunk) for chunk in chunks]  
-    # return chunks  
-
-    # if int_letter == 10
-
-    pass
-
-def translate_letter_one_by_one(context, letter):
-
-    temp_int = 0
-
-    if letter == 'A':
-        temp_int = 10
-    elif letter == 'B':
-        temp_int = 11
-    elif letter == 'C':
-        temp_int = 12
-    elif letter == 'D':
-        temp_int = 11
-    elif letter == 'E':
-        temp_int = 11
-    elif letter == 'F':
-        temp_int = 11
-    elif letter == 'G':
-        temp_int = 11
-    elif letter == 'H':
-        temp_int = 12
-    elif letter == 'I':
-        temp_int = 11
-    elif letter == 'J':
-        temp_int = 11
-    elif letter == 'K':
-        temp_int = 11
-    elif letter == 'L':
-        temp_int = 11
-    elif letter == 'M':
-        temp_int = 12
-    elif letter == 'N':
-        temp_int = 11
-    elif letter == 'O':
-        temp_int = 11
-    elif letter == 'P':
-        temp_int = 11
-    elif letter == 'Q':
-        temp_int = 11
-    elif letter == 'R':
-        temp_int = 12
-    elif letter == 'S':
-        temp_int = 11
-    elif letter == 'T':
-        temp_int = 11
-    elif letter == 'U':
-        temp_int = 11
-    elif letter == 'V':
-        temp_int = 11
-    elif letter == 'W':
-        temp_int = 12
-    elif letter == 'X':
-        temp_int = 11
-    elif letter == 'Y':
-        temp_int = 11
-    elif letter == 'Z':
-        temp_int = 11
 
 def log(msg):
     file_obj = open(log_path, 'a')
@@ -1483,7 +1418,6 @@ class ReciveClientThreadC(threading.Thread):
             
         print(f"准备开始处理急速购买标的[{str_symbol}]-[{buy_amount}]w")
         base_num = 1
-        # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
         if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].price > 0):
             buy_in_num = math.floor(buy_amount * 10000 / self.context.ids_info_dict[str_symbol].price)
             base_num = math.floor(buy_in_num / 100)
@@ -1496,7 +1430,7 @@ class ReciveClientThreadC(threading.Thread):
         buy_id = int.from_bytes(quick_sell_id, byteorder='big')
         str_symbol = self.change_stock_int_to_string(buy_id)
         
-        sell_num = 100000
+        sell_num = 100
         if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].hold_available > 0):
             sell_num = self.context.ids_info_dict[str_symbol].hold_available
         
