@@ -14,6 +14,7 @@ import re
 import pickle
 import subprocess
 import math
+import sys 
 
 global_i = 0
 str_strategy = 'VDebug'
@@ -25,10 +26,16 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-section_history_stock_count = 3
+SECTION_HISTORY_STOCK_COUNT = 3
+
+OP_ID_S2C_REAL_TIME_DATA_SEND = 102
 
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
+
+#0v0
+#=-=
+#1234
 
 def VolumeMonitorDebug():
     pass
@@ -111,7 +118,7 @@ def init(context):
 
     # 线程Server 正式服12345, 调试服12346   3
     # 这个是新版新版新版新版新版新版
-    main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
+    main_server_thread = MainServerTreadC("0.0.0.0", 12345, context)
     main_server_thread.start()
 
     # 关盘后，模拟on_bar用
@@ -131,7 +138,7 @@ def simulation_on_bar(context):
     test_time_d = '2024-06-17 '
     test_time_h = '14'
     test_time_m = '20'
-    test_time_s = '00+08:00'
+    test_time_s = '00.00013+08:00'
 
     test_time_time = test_time_d + test_time_h + ':' + test_time_m + ':' + test_time_s
     #'2024-5-15 14:20:00+08:00'
@@ -140,7 +147,7 @@ def simulation_on_bar(context):
         time.sleep(3)
         for sy in context.subscription_stock_arr:
             context.cur_data_dic.clear()
-            context.cur_data_dic[sy] = PackCurrentDataFrame(sy, '100000.0', test_time_time).to_dict()
+            context.cur_data_dic[sy] = PackSecondDataFrame(sy, '10000', test_time_time).to_dict()
 
             #if context.socket_dic:
             #    for k,v in context.socket_dic.items():
@@ -612,6 +619,7 @@ def on_tick(context, tick):
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
+                        #这里有点问题，可能会有重复数据出现，后面记得来改!!!
                         for data_key, data_value in context.cur_data_dic.items():
                             temp_ready_for_send_data = data_value
 
@@ -707,12 +715,12 @@ def test_get_data(context):
     # context.his_data = history(symbol=context.symbol_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
     # print(f"{len(context.his_data)}")
 
-    print(f"section_history_stock_count::{section_history_stock_count}")
+    print(f"SECTION_HISTORY_STOCK_COUNT::{SECTION_HISTORY_STOCK_COUNT}")
 
     temp_ids_str = ''
     temp_index = 0
     temp_his_data = []
-    #先将存入集合中的标的代码，以section_history_stock_count为准拼接未字符串，用来分批次获得历史数据
+    #先将存入集合中的标的代码，以SECTION_HISTORY_STOCK_COUNT为准拼接未字符串，用来分批次获得历史数据
     for item in context.subscription_stock_arr:
             if temp_index == 0:
                 temp_ids_str = item
@@ -721,7 +729,7 @@ def test_get_data(context):
             temp_index += 1
 
             #当达到批次的数量时，开始获得历史数据
-            if temp_index == section_history_stock_count:
+            if temp_index == SECTION_HISTORY_STOCK_COUNT:
                 temp_his_data = history(symbol=temp_ids_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
                 print(f"temp_his_data length::{len(temp_his_data)}")
 
@@ -831,7 +839,7 @@ def get_history_data_in_today(context):
     #这里我们用一个临时集合来接取数据，再将临时集合中的数据添加到context.his_data_for_today中
     # context.his_data_for_today = history(symbol=context.symbol_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob', adjust=ADJUST_PREV, df=False)
     
-    print(f"section_history_stock_count::{section_history_stock_count}")
+    print(f"SECTION_HISTORY_STOCK_COUNT::{SECTION_HISTORY_STOCK_COUNT}")
 
     temp_section_ids_str = ''
     temp_section_index = 0
@@ -839,7 +847,7 @@ def get_history_data_in_today(context):
     temp_his_data_for_today_second = []
     temp_his_25_amount_data = []
     temp_his_25_today_amount_data = []
-    #先将存入集合中的标的代码，以section_history_stock_count为准拼接未字符串，用来分批次获得历史数据
+    #先将存入集合中的标的代码，以SECTION_HISTORY_STOCK_COUNT为准拼接未字符串，用来分批次获得历史数据
     for item in context.subscription_stock_arr:
             if temp_section_index == 0:
                 temp_section_ids_str = item
@@ -848,7 +856,7 @@ def get_history_data_in_today(context):
             temp_section_index += 1
 
             #当达到批次的数量时，开始获得历史数据
-            if temp_section_index == section_history_stock_count:
+            if temp_section_index == SECTION_HISTORY_STOCK_COUNT:
                 temp_his_today_data = history(symbol=temp_section_ids_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
                 print(f"temp_his_today_data length::{len(temp_his_today_data)}")
 
@@ -1082,10 +1090,12 @@ def send_message_method(client_socket, context):
 
 
 #发送消息线程---102
-def send_message_second_method(client_socket, context):
+def send_message_second_method_backup(client_socket, context):
     try:
         #耗时测试
         #t = time.time()
+
+        #先尝试将102改成二进制发送
 
         context.operation_id_send = 102
         operation_id_byte = context.operation_id_send.to_bytes(4, byteorder='big')
@@ -1126,7 +1136,85 @@ def send_message_second_method(client_socket, context):
             context.cur_data_dic.clear()
             context.temp_clear_curdata_index = 0
 
-        #pass
+
+#重写发送消息线程---102，改为二进制发送
+def send_message_second_method(client_socket, context):
+    try:
+
+        #先尝试将102改成二进制发送  OP_ID_S2C_REAL_TIME_DATA_SEND - 102
+
+        temp_symbol_letter = 0
+        temp_symbol_num = 0
+        temp_amount = 0
+        temp_eob_date = 0
+        temp_eob_time = 0
+
+        #这里使用for循环，有一次发现dic里存在多条数据，但是几率非常非常小
+        for key, valume in context.cur_data_dic.items():
+            # print(f"{valume['symbol']}:{valume['amount']}:{valume['eob']}")
+
+            #1-2 int32
+            # OP_ID_S2C_REAL_TIME_DATA_SEND
+
+            #2-4 int32
+            temp_symbol_arr = valume['symbol'].split(".")
+            temp_symbol_letter = translate_letter_to_int(temp_symbol_arr[0])
+            symbol_letter = temp_symbol_letter.to_bytes(4, byteorder='big')
+
+            #3-4 int32
+            temp_symbol_num = int(temp_symbol_arr[1])
+            symbol_num = temp_symbol_num.to_bytes(4, byteorder='big')
+
+            #4-4 int32
+            temp_amount = int(valume['amount'])
+            amount = temp_amount.to_bytes(4, byteorder='big')
+
+            #5-4 int32
+            temp_eob_arr = valume['eob'].split(" ")
+            temp_eob_arr_date_arr = temp_eob_arr[0].split("-")
+            temp_temp_date = ''
+            for chunk in temp_eob_arr_date_arr:
+                temp_temp_date = temp_temp_date + chunk
+            temp_eob_date = int(temp_temp_date)
+            eob_date = temp_eob_date.to_bytes(4, byteorder='big')
+
+            #6-4 int32
+            temp_eob_arr_time_arr = temp_eob_arr[1].split("+")
+            temp_hhmmss_arr = temp_eob_arr_time_arr[0].split(":")
+            temp_temp_hhmmss = ''
+            for chunk in temp_hhmmss_arr:
+                temp_temp_hhmmss = temp_temp_hhmmss + chunk
+            #这里会有毫秒的情况，例如13:13:13.0000013的情况,如果没有，好像split也不会报错
+            temp_temp_hhmmss_without_dot = temp_temp_hhmmss.split(".")
+            temp_eob_time = int(temp_temp_hhmmss_without_dot[0])
+            eob_time = temp_eob_time.to_bytes(4, byteorder='big')
+
+            # print(f"{temp_symbol_letter}-{temp_symbol_num}-{temp_amount}-{temp_eob_date}-{temp_eob_time}")
+
+            #4+4+4+4+4+4 = 24字节
+            # client_socket.sendall(OP_ID_S2C_REAL_TIME_DATA_SEND.to_bytes(4))
+            client_socket.sendall(OP_ID_S2C_REAL_TIME_DATA_SEND.to_bytes(4, byteorder='big') + symbol_letter + symbol_num + amount + eob_date + eob_time)
+
+
+    except ConnectionResetError:
+         client_socket.close()
+         print("Client disconnected unexpectedly.")
+         print("In send method.")
+         
+         for key, valume in context.socket_dic.items():
+                    if client_socket == valume:
+                        context.delete_temp_adress_arr.append(key)
+                        context.client_init_complete_dic[client_socket] = False
+                        break
+
+    finally:
+
+        context.temp_clear_curdata_index += 1
+
+        if context.temp_clear_curdata_index == len(context.socket_dic):
+            context.cur_data_dic.clear()
+            context.temp_clear_curdata_index = 0
+
 
 def load_ids(context):
     # 看股票代码就能分辨，上证股票是在上海交易所上市的股票，股票代码以600、601、603开头，科创板（在上海交易所上市）股票代码以688开头
@@ -1254,20 +1342,30 @@ def load_mac_address(context):
                     if len(str_tmp) > 0:
                         context.mac_address_arr.append(str_tmp)
                         
-def translate_letter_to_int(context, str_letter):
 
-    # str_num = str(num)  
-    # # 使用列表推导式和字符串切片来拆解字符串  
-    # chunks = [str_num[i:i+2] for i in range(0, len(str_num), 2)]  
-    # # 如果需要，可以将子字符串再转回整数（但在这个例子中，我们保持它们为字符串）  
-    # # int_chunks = [int(chunk) for chunk in chunks]  
-    # return chunks  
+#将标的前面的英文转化为int类型
+def translate_letter_to_int(stork_letter):
 
-    # if int_letter == 10
+    # 使用列表推导式和字符串切片来拆解字符串  
+    chunks = [stork_letter[i:i+1] for i in range(0, len(stork_letter), 1)]  
+    
+    temp_split_joint_letter = ''
 
-    pass
+    for letter in chunks:
+        print(f"{letter}")
+        temp_int_letter = translate_letter_one_by_one(letter)
+        print(f"{temp_int_letter}")
+        temp_split_joint_letter = temp_split_joint_letter + temp_int_letter
 
-def translate_letter_one_by_one(context, letter):
+    # print(f"int letter::{temp_split_joint_letter}")
+
+    return int(temp_split_joint_letter)
+
+
+#将单个字母转换为自定义的int类型
+def translate_letter_one_by_one(letter):
+
+    #99,999,999 int32
 
     temp_int = 0
 
@@ -1278,51 +1376,53 @@ def translate_letter_one_by_one(context, letter):
     elif letter == 'C':
         temp_int = 12
     elif letter == 'D':
-        temp_int = 11
+        temp_int = 13
     elif letter == 'E':
-        temp_int = 11
+        temp_int = 14
     elif letter == 'F':
-        temp_int = 11
+        temp_int = 15
     elif letter == 'G':
-        temp_int = 11
+        temp_int = 16
     elif letter == 'H':
-        temp_int = 12
+        temp_int = 17
     elif letter == 'I':
-        temp_int = 11
+        temp_int = 18
     elif letter == 'J':
-        temp_int = 11
+        temp_int = 19
     elif letter == 'K':
-        temp_int = 11
+        temp_int = 20
     elif letter == 'L':
-        temp_int = 11
+        temp_int = 21
     elif letter == 'M':
-        temp_int = 12
+        temp_int = 22
     elif letter == 'N':
-        temp_int = 11
+        temp_int = 23
     elif letter == 'O':
-        temp_int = 11
+        temp_int = 24
     elif letter == 'P':
-        temp_int = 11
+        temp_int = 25
     elif letter == 'Q':
-        temp_int = 11
+        temp_int = 26
     elif letter == 'R':
-        temp_int = 12
+        temp_int = 27
     elif letter == 'S':
-        temp_int = 11
+        temp_int = 28
     elif letter == 'T':
-        temp_int = 11
+        temp_int = 29
     elif letter == 'U':
-        temp_int = 11
+        temp_int = 30
     elif letter == 'V':
-        temp_int = 11
+        temp_int = 31
     elif letter == 'W':
-        temp_int = 12
+        temp_int = 32
     elif letter == 'X':
-        temp_int = 11
+        temp_int = 33
     elif letter == 'Y':
-        temp_int = 11
+        temp_int = 34
     elif letter == 'Z':
-        temp_int = 11
+        temp_int = 35
+
+    return str(temp_int)
 
 def log(msg):
     file_obj = open(log_path, 'a')

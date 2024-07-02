@@ -14,6 +14,8 @@ import subprocess
 import re
 import uuid
 
+OP_ID_S2C_REAL_TIME_DATA_SEND = 102
+
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
 
@@ -1743,25 +1745,66 @@ class ReciveQThread(QThread):
                     # main_window.is_init_window = True
                     # main_window.has_init_window_single.emit(main_window.is_init_window)
 
-                #持续更新实时数据,以秒为单位
-                elif operation_id == 102:
+                #持续更新实时数据,以秒为单位    102
+                elif operation_id == OP_ID_S2C_REAL_TIME_DATA_SEND:
 
-                    single_data = self.client_socket.recv(4)
-                    current_data_len = int.from_bytes(single_data, byteorder='big')
-                    #print(f"cur_data_len:{current_data_len}")
+                    #2-4 int32
+                    symbol_letter_bytes = self.client_socket.recv(4)
+                    symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+                    symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+                    # print(f"symbol_letter:{symbol_letter}")
 
-                    json_his_data = self.client_socket.recv(current_data_len)
-                    current_data = json.loads(json_his_data.decode('utf-8')) 
+                    #3-4 int32
+                    symbol_num_bytes = self.client_socket.recv(4)
+                    symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+                    #___这里需要补全标的代码前面的0
+                    if len(symbol_num) < 6:
+                        need_complement = 6 - len(symbol_num)
+                        for i in range(need_complement):
+                            i += 1
+                            symbol_num = '0' + symbol_num
+                    # print(f"symbol_num:{symbol_num}")
 
-                    #print(f"current_data::{current_data}")
+                    #4-4 int32
+                    amount_bytes = self.client_socket.recv(4)
+                    amount = str(round(float(int.from_bytes(amount_bytes, byteorder='big')), 2))
+                    # print(f"amount:{amount}")
 
-                    main_window.temp_current_data_dic.clear()
-                    main_window.temp_current_data_dic = {key : AnalysisSecondData.from_dict(value) for key, value in current_data.items()}
+                    #5-4 int32
+                    eob_date_bytes = self.client_socket.recv(4)
+                    eob_date_str = str(int.from_bytes(eob_date_bytes, byteorder='big'))
+                    eob_date = self.re_complement_date(eob_date_str)
+                    # print(f"eob_date:{eob_date}")
 
-                    temp_current_data = None
+                    #6-4 int32
+                    eob_time_bytes = self.client_socket.recv(4)
+                    eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
+                    eob_time = self.re_complement_time(eob_time_str)
+                    # print(f"eob_time:{eob_time}")
 
-                    for key, valume in main_window.temp_current_data_dic.items():
-                        temp_current_data = valume
+                    #====测试没问题后删掉注释中代码
+                    # single_data = self.client_socket.recv(4)
+                    # current_data_len = int.from_bytes(single_data, byteorder='big')
+                    # #print(f"cur_data_len:{current_data_len}")
+
+                    # json_his_data = self.client_socket.recv(current_data_len)
+                    # current_data = json.loads(json_his_data.decode('utf-8')) 
+
+                    # #print(f"current_data::{current_data}")
+
+                    # main_window.temp_current_data_dic.clear()
+                    # main_window.temp_current_data_dic = {key : AnalysisSecondData.from_dict(value) for key, value in current_data.items()}
+                    #====
+                    
+                    symbol = symbol_letter + '.' + symbol_num
+                    eob = eob_date + " " + eob_time
+
+                    #====测试没问题后删掉注释中代码
+                    # for key, valume in main_window.temp_current_data_dic.items():
+                    #     temp_current_data = valume
+                    #====
+
+                    temp_current_data = AnalysisSecondData(symbol, amount, eob)
 
                     #======================list方式,等待刷新
 
@@ -1863,6 +1906,117 @@ class ReciveQThread(QThread):
                     main_window.has_init_window_single.emit(main_window.is_init_window)
 
                     # main_window.teat_thread_1()
+
+    #拼接hh:mm:ss+8:00
+    def re_complement_time(self, str_time):
+        # 使用列表推导式和字符串切片来拆解字符串  
+        chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]  
+
+        temp_split_joint_letter = ''
+
+        index = 0
+        for letter in chunks:
+            if index == 0:
+                temp_split_joint_letter = letter
+            else:
+                temp_split_joint_letter = temp_split_joint_letter + ':' + letter
+            index += 1
+
+        return temp_split_joint_letter + '+08:00'
+
+    #拼接年月日
+    def re_complement_date(self, str_date):
+        # 使用列表推导式和字符串切片来拆解字符串  
+        chunks = [str_date[i:i+4] for i in range(0, len(str_date), 4)]  
+        chunks_day = [chunks[1][i:i+2] for i in range(0, len(chunks[1]), 2)]
+
+        temp_split_joint_letter = ''
+
+        index = 0
+        for letter in chunks_day:
+            if index == 0:
+                temp_split_joint_letter = letter
+            else:
+                temp_split_joint_letter = temp_split_joint_letter + '-' + letter
+            index += 1
+
+        return chunks[0] + '-' + temp_split_joint_letter
+
+    #将标的前面的英文转化为int类型
+    def re_translate_letter_to_int(self, stork_letter):
+
+        # 使用列表推导式和字符串切片来拆解字符串  
+        chunks = [stork_letter[i:i+2] for i in range(0, len(stork_letter), 2)]  
+        
+        temp_split_joint_letter = ''
+
+        for letter in chunks:
+            temp_int_letter = self.re_translate_letter_one_by_one(int(letter))
+            temp_split_joint_letter = temp_split_joint_letter + temp_int_letter
+
+        return temp_split_joint_letter
+
+    #将单个字母转换为自定义的int类型
+    def re_translate_letter_one_by_one(self, letter):
+
+        #99,999,999 int32
+
+        temp_int = 0
+
+        if letter == 10:
+            temp_int = 'A'
+        elif letter == 11:
+            temp_int = 'B'
+        elif letter == 12:
+            temp_int = 'C'
+        elif letter == 13:
+            temp_int = 'D'
+        elif letter == 14:
+            temp_int = 'E'
+        elif letter == 15:
+            temp_int = 'F'
+        elif letter == 16:
+            temp_int = 'G'
+        elif letter == 17:
+            temp_int = 'H'
+        elif letter == 18:
+            temp_int = 'I'
+        elif letter == 19:
+            temp_int = 'J'
+        elif letter == 20:
+            temp_int = 'K'
+        elif letter == 21:
+            temp_int = 'L'
+        elif letter == 22:
+            temp_int = 'M'
+        elif letter == 23:
+            temp_int = 'N'
+        elif letter == 24:
+            temp_int = 'O'
+        elif letter == 25:
+            temp_int = 'P'
+        elif letter == 26:
+            temp_int = 'Q'
+        elif letter == 27:
+            temp_int = 'R'
+        elif letter == 28:
+            temp_int = 'S'
+        elif letter == 29:
+            temp_int = 'T'
+        elif letter == 30:
+            temp_int = 'U'
+        elif letter == 31:
+            temp_int = 'V'
+        elif letter == 32:
+            temp_int = 'W'
+        elif letter == 33:
+            temp_int = 'X'
+        elif letter == 34:
+            temp_int = 'Y'
+        elif letter == 35:
+            temp_int = 'Z'
+
+        return str(temp_int)
 
 class SendQThread(QThread):
     def __init__(self, client_socket):  
