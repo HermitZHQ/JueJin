@@ -1444,8 +1444,17 @@ class ReciveClientThreadC(threading.Thread):
         self._stop_event.set()
         print("线程已停止")
         
+    # 插入字符函数
+    def insert_char(self, string, index, char):
+        return string[:index] + char + string[index:]
+
     def change_stock_int_to_string(self, id):
         str_tmp = str(id)
+        # 需要修复例如000300，这种的标的ID，因为这种ID转换为int后，前面的0就没有了，需要我们自己添加，所以需要检测字符串长度
+        str_len = len(str_tmp)
+        missing_len = 6 - str_len
+        for i in range(0, missing_len):
+            str_tmp = self.insert_char(str_tmp, 0, '0')
         first3 = str_tmp[:3]
         if (first3 == '600'):
             str_tmp = 'SHSE.' + str_tmp[:6]
@@ -1480,7 +1489,7 @@ class ReciveClientThreadC(threading.Thread):
         buy_id = int.from_bytes(quick_buy_id, byteorder='big')
         str_symbol = self.change_stock_int_to_string(buy_id)
         buy_amount = int.from_bytes(quick_buy_amount, byteorder='little')
-            
+        
         print(f"准备开始处理急速购买标的[{str_symbol}]-[{buy_amount}]w")
         base_num = 1
         # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
@@ -1488,7 +1497,12 @@ class ReciveClientThreadC(threading.Thread):
         if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].price > 0):
             buy_in_num = math.floor(buy_amount * 10000 / self.context.ids_info_dict[str_symbol].price)
             base_num = math.floor(buy_in_num / 100)
-            
+        
+        # 科创股至少买200，检查如果是100的话，能买的起200就买
+        tech_flag = ((str_symbol.find('.688') != -1) or (str_symbol.find('.689') != -1))
+        if tech_flag and base_num == 1:
+            base_num = 2
+        
         # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求）
         order_volume(symbol=str_symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
         
