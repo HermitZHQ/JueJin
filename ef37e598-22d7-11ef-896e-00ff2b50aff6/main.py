@@ -13,10 +13,9 @@ import numpy as np
 import re
 import pickle
 import subprocess
-import math
 
 global_i = 0
-str_strategy = 'VDebug'
+str_strategy = 'V'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path_a1 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A1.txt'
 ids_path_a2 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A2.txt'
@@ -25,32 +24,12 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-section_history_stock_count = 3
+section_history_stock_count = 50
 
 OP_ID_C2S_QUICK_BUY = 120
-OP_ID_C2S_QUICK_SELL = 121
 
-def VolumeMonitorDebug():
+def VolumeMonitor():
     pass
-
-class TargetInfo:
-    def __init__(self):
-        self.name = ""
-        self.hold_available = 0 # 可用持仓，一般只需要初始化一次，反复初始化会很卡
-        self.price = 0
-        self.first_record_flag = False
-        self.pre_close = 0
-        self.vwap = 0
-        self.upper_limit = 0 # 涨停价
-        self.lower_limit = 0
-        self.suspended = False # 是否停牌
-        self.sold_flag = False
-        self.sold_price = 0 # 虚拟卖出时的记录价格，用于统计信息
-        self.sold_mv = 0 # 虚拟卖出后锁定的市值
-        self.fpr = -1 # 浮动盈亏缓存
-        self.total_holding = 0 # 这里的总量并不从pos中取，而是从完成（部成）的order中记录，因为我发现完全用pos中的有时候数据更新不及时，比如部成的数量都已经显示有10000股了，且已经输出到日志中，但是紧接着马上取pos中的持仓，却还没有更新到该值，取出来可能是4，5000，虽然这个发生的几率很小，但是还是需要处理
-        self.partial_holding = 0 # 记录部成的临时值
-        self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
 
 # 策略中必须有init方法
 def init(context):
@@ -59,7 +38,6 @@ def init(context):
     context.operation_id_send = 0
     context.operation_id_recive = 0
     context.symbol_str = ''
-    context.delelte_ready_for_send = None
 
     context.subscription_stock_arr = []
     context.mac_address_arr = []
@@ -86,7 +64,6 @@ def init(context):
     context.ready_second_for_send = []
     context.init_complete_client = {}
     context.ids = {}
-    context.ids_info_dict = {} # 记录一些tick中的标的数据，方便在其他地方的时候可以使用，数据格式为：key：标的字符串  value：是TargetInfo类型
     context.is_subscribe = False
     context.iniclient_socket_lock = threading.Lock()
 
@@ -110,12 +87,12 @@ def init(context):
     load_mac_address(context)
 
     # 线程Server 正式服12345, 调试服12346   3
-    # 这个是新版新版新版新版新版新版
-    main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
+    # 这个是旧版旧版旧版旧版旧版旧版旧版旧版旧版旧版旧版
+    main_server_thread = MainServerTreadC("0.0.0.0", 12345, context)
     main_server_thread.start()
 
     # 关盘后，模拟on_bar用
-    # init_client_one_time(context)
+    #init_client_one_time(context)
     
     #测试获得当日历史数据
     # load_ids(context)
@@ -482,23 +459,6 @@ def init_client_fragments(context):
                 if_complete = 1
 
 def on_tick(context, tick):
-    
-    # 更新对应标的的一些保存信息
-    if tick.symbol in context.ids_info_dict.keys():
-        context.ids_info_dict[tick.symbol].price = tick.price
-        
-        # 持仓不要一直获取，下面拿pos的函数延迟很大，需要特别注意！！！
-        if context.ids_info_dict[tick.symbol].hold_available == 0:
-            # 获取当前持仓
-            curHolding = 0
-            # 这里的Side一定要标注正确，比如我是买入的脚本，里面有个都是使用的Buy类型
-            # 验证了下，获取买入后的持仓都是Buy类型，不是我想象的sell就要获取sell类型，我估计期货才用这个
-            pos = context.account().position(symbol = tick.symbol, side = OrderSide_Buy)
-            if not pos:
-                context.ids_info_dict[tick.symbol].hold_available = 0
-            else:
-                context.ids_info_dict[tick.symbol].hold_available = pos.available_now
-                # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
 
     #客户端断开连接后，从socket_dic中移除相应sokcet
     if len(context.delete_temp_adress_arr) > 0:
@@ -561,6 +521,7 @@ def on_tick(context, tick):
 
             #             context.test_next_second_data_time = now_time_m
             
+
             if context.socket_dic:
                 for k,v in context.socket_dic.items():
 
@@ -588,14 +549,15 @@ def on_tick(context, tick):
                                 #这里需要遍历ready_second_for_send,查看是否有重复数据
                                 for second_data in context.ready_second_for_send:
                                     if ready_data['symbol'] == second_data['symbol']:
-                                        if ready_data['eob'] != second_data['eob']:
+                                        if ready_data['eob'] == second_data['eob']:
+                                            print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
+                                            pass
+                                        else:
                                             send_message_second_method(v, context)
-                                        #这里将break tab了一下，不知道会不会有啥问题，看看先    
-                                        break
+                                    break
 
-                        if len(context.ready_for_send) > 0:
+                                # send_message_second_method(v, context)
                             context.ready_for_send.clear()
-                        if len(context.ready_second_for_send) > 0:
                             context.ready_second_for_send.clear()
 
                         #用于测试1分钟内，tick掉的数据，暂时不用了
@@ -605,57 +567,17 @@ def on_tick(context, tick):
                         #     print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
                         #     send_message_second_method(v, context)
 
-                        context.cur_data_dic.clear() 
+                        context.cur_data_dic.clear()
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
                         send_message_second_method(v, context)
+
 
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
                         for data_key, data_value in context.cur_data_dic.items():
                             temp_ready_for_send_data = data_value
-
-                            temp_index = 0
-
-                            #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
-                            for find_symbol_data in context.ready_for_send:
-
-                                temp_index += 1
-
-                                if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
-                                    #获得当前数据的当前分钟
-                                    temp_cur_data_time = temp_ready_for_send_data['eob']
-
-                                    get_A_time_arr = temp_cur_data_time.split("+")
-                                    get_A_time_arr_1 = get_A_time_arr[0].split(" ")
-                                    get_A_time_arr_2 = get_A_time_arr_1[1].split(":")
-
-                                    get_A_min = get_A_time_arr_2[1]
-
-                                    #获得在集合中数据的当前分钟
-                                    temp_in_list_data_time = find_symbol_data['eob']
-
-                                    get_B_time_arr = temp_in_list_data_time.split("+")
-                                    get_B_time_arr_1 = get_B_time_arr[0].split(" ")
-                                    get_B_time_arr_2 = get_B_time_arr_1[1].split(":")
-
-                                    get_B_min = get_B_time_arr_2[1]
-
-                                    if get_A_min == get_B_min:
-
-                                        temp_delete_amount = find_symbol_data['amount']
-                                        temp_now_amount = temp_ready_for_send_data['amount']
-                                        #当前分钟内同一只标的，数据相加
-                                        temp_adding_amount = round(float(temp_delete_amount), 2) + round(float(temp_now_amount), 2)
-
-                                        #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
-                                        find_symbol_data['amount'] = str(temp_adding_amount)
-                                        find_symbol_data['eob'] = temp_ready_for_send_data['eob']
-
-                                        break
-
-                            if temp_index == len(context.ready_for_send):
-                                context.ready_for_send.append(temp_ready_for_send_data)    
+                            context.ready_for_send.append(temp_ready_for_send_data)
 
                         print(f"ready_for_send length:{len(context.ready_for_send)}")
                         
@@ -695,10 +617,10 @@ def on_bar(context, bars):
 def test_get_data(context):
 
     yesterday_date = get_previous_or_friday_date()
-    s_time = str(yesterday_date) + ' 9:15:0'
+    s_time = str(yesterday_date) + ' 9:30:0'
     e_time = str(yesterday_date) + ' 15:00:0'
-    test_s_time = '2024-06-07' + ' 9:15:0'
-    test_e_time = '2024-06-07' + ' 15:00:0'
+    test_s_time = '2024-06-24' + ' 9:15:0'
+    test_e_time = '2024-06-24' + ' 15:00:0'
 
     print(f"{s_time} To {e_time}")
 
@@ -805,8 +727,8 @@ def get_history_data_in_today(context):
     s_time= str(get_now_time_arr_1[0]) + ' 09:15:00'
     e_time = str(get_now_time_arr_1[0]) + ' ' + str(get_now_hour) + ':' + str(get_now_min) + ':' + '00'
     #test为测试时用的时间
-    test_s_time = '2024-06-19' + ' ' + '09:15:00'
-    test_e_time = '2024-06-19' + ' ' + '15:00:00'
+    test_s_time = '2024-06-25' + ' ' + '09:15:00'
+    test_e_time = '2024-06-25' + ' ' + '15:00:00'
 
     #这里为获取当日9:25的集合进价时间   2
     s_25_today_time = str(get_now_time_arr_1[0]) + ' 09:24:57'
@@ -1201,7 +1123,6 @@ def load_ids(context):
                 if str_tmp not in context.subscription_stock_arr:
                     context.subscription_stock_arr.append(str_tmp)
                     context.temp_judge_second_data_dic[str_tmp] = False
-                    context.ids_info_dict[str_tmp] = TargetInfo()
 
 #读取允许连入的MAC地址
 def load_mac_address(context):
@@ -1254,75 +1175,7 @@ def load_mac_address(context):
                     if len(str_tmp) > 0:
                         context.mac_address_arr.append(str_tmp)
                         
-def translate_letter_to_int(context, str_letter):
 
-    # str_num = str(num)  
-    # # 使用列表推导式和字符串切片来拆解字符串  
-    # chunks = [str_num[i:i+2] for i in range(0, len(str_num), 2)]  
-    # # 如果需要，可以将子字符串再转回整数（但在这个例子中，我们保持它们为字符串）  
-    # # int_chunks = [int(chunk) for chunk in chunks]  
-    # return chunks  
-
-    # if int_letter == 10
-
-    pass
-
-def translate_letter_one_by_one(context, letter):
-
-    temp_int = 0
-
-    if letter == 'A':
-        temp_int = 10
-    elif letter == 'B':
-        temp_int = 11
-    elif letter == 'C':
-        temp_int = 12
-    elif letter == 'D':
-        temp_int = 11
-    elif letter == 'E':
-        temp_int = 11
-    elif letter == 'F':
-        temp_int = 11
-    elif letter == 'G':
-        temp_int = 11
-    elif letter == 'H':
-        temp_int = 12
-    elif letter == 'I':
-        temp_int = 11
-    elif letter == 'J':
-        temp_int = 11
-    elif letter == 'K':
-        temp_int = 11
-    elif letter == 'L':
-        temp_int = 11
-    elif letter == 'M':
-        temp_int = 12
-    elif letter == 'N':
-        temp_int = 11
-    elif letter == 'O':
-        temp_int = 11
-    elif letter == 'P':
-        temp_int = 11
-    elif letter == 'Q':
-        temp_int = 11
-    elif letter == 'R':
-        temp_int = 12
-    elif letter == 'S':
-        temp_int = 11
-    elif letter == 'T':
-        temp_int = 11
-    elif letter == 'U':
-        temp_int = 11
-    elif letter == 'V':
-        temp_int = 11
-    elif letter == 'W':
-        temp_int = 12
-    elif letter == 'X':
-        temp_int = 11
-    elif letter == 'Y':
-        temp_int = 11
-    elif letter == 'Z':
-        temp_int = 11
 
 def log(msg):
     file_obj = open(log_path, 'a')
@@ -1443,80 +1296,6 @@ class ReciveClientThreadC(threading.Thread):
     def stop(self):
         self._stop_event.set()
         print("线程已停止")
-        
-    # 插入字符函数
-    def insert_char(self, string, index, char):
-        return string[:index] + char + string[index:]
-
-    def change_stock_int_to_string(self, id):
-        str_tmp = str(id)
-        # 需要修复例如000300，这种的标的ID，因为这种ID转换为int后，前面的0就没有了，需要我们自己添加，所以需要检测字符串长度
-        str_len = len(str_tmp)
-        missing_len = 6 - str_len
-        for i in range(0, missing_len):
-            str_tmp = self.insert_char(str_tmp, 0, '0')
-        first3 = str_tmp[:3]
-        if (first3 == '600'):
-            str_tmp = 'SHSE.' + str_tmp[:6]
-        elif (first3 == '601'):
-            str_tmp = 'SHSE.' + str_tmp[:6]
-        elif (first3 == '603'):
-            str_tmp = 'SHSE.' + str_tmp[:6]
-        elif (first3 == '605'):
-            str_tmp = 'SHSE.' + str_tmp[:6]
-        elif (first3 == '688'):
-            str_tmp = 'SHSE.' + str_tmp[:6]
-        elif (first3 == '689'):
-            str_tmp = 'SHSE.' + str_tmp[:6]
-        elif (first3 == '000'):
-            str_tmp = 'SZSE.' + str_tmp[:6]
-        elif (first3 == '001'):
-            str_tmp = 'SZSE.' + str_tmp[:6]
-        elif (first3 == '002'):
-            str_tmp = 'SZSE.' + str_tmp[:6]
-        elif (first3 == '003'):
-            str_tmp = 'SZSE.' + str_tmp[:6]
-        elif (first3 == '300'):
-            str_tmp = 'SZSE.' + str_tmp[:6]
-        elif (first3 == '301'):
-            str_tmp = 'SZSE.' + str_tmp[:6]
-        
-        return str_tmp
-        
-    def socket_receive_quick_buy(self):
-        quick_buy_id = self.client_socket.recv(4)
-        quick_buy_amount = self.client_socket.recv(2)
-        buy_id = int.from_bytes(quick_buy_id, byteorder='big')
-        str_symbol = self.change_stock_int_to_string(buy_id)
-        buy_amount = int.from_bytes(quick_buy_amount, byteorder='little')
-        
-        print(f"准备开始处理急速购买标的[{str_symbol}]-[{buy_amount}]w")
-        base_num = 1
-        # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
-        # TODO:科创至少200
-        if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].price > 0):
-            buy_in_num = math.floor(buy_amount * 10000 / self.context.ids_info_dict[str_symbol].price)
-            base_num = math.floor(buy_in_num / 100)
-        
-        # 科创股至少买200，检查如果是100的话，能买的起200就买
-        tech_flag = ((str_symbol.find('.688') != -1) or (str_symbol.find('.689') != -1))
-        if tech_flag and base_num == 1:
-            base_num = 2
-        
-        # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求）
-        order_volume(symbol=str_symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
-        
-    def socket_receive_quick_sell(self):
-        quick_sell_id = self.client_socket.recv(4)
-        buy_id = int.from_bytes(quick_sell_id, byteorder='big')
-        str_symbol = self.change_stock_int_to_string(buy_id)
-        
-        sell_num = 100000
-        if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].hold_available > 0):
-            sell_num = self.context.ids_info_dict[str_symbol].hold_available
-        
-        # 直接使用市价卖出，则可以不指定卖出价格（居然根据佳哥需求）
-        order_volume(symbol=str_symbol, volume=sell_num, side=OrderSide_Sell, order_type=OrderType_Market, position_effect=PositionEffect_Close)
 
     def run(self):
         #主动停止线程while not self._stop_event.is_set():
@@ -1554,13 +1333,10 @@ class ReciveClientThreadC(threading.Thread):
                     #客户端初始化完成，可以开始发送数据
                     elif self.context.operation_id_recive == 103:
                         self.context.client_init_complete_dic[self.client_socket] = True
-                        
                     elif self.context.operation_id_recive == OP_ID_C2S_QUICK_BUY:
-                        self.socket_receive_quick_buy()
-                        
-                    elif self.context.operation_id_recive == OP_ID_C2S_QUICK_SELL:
-                        self.socket_receive_quick_sell()
-                        
+                        quick_buy_id = self.client_socket.recv(4)
+                        buy_id = int.from_bytes(quick_buy_id, byteorder='big')
+                        print(f"准备开始处理急速购买标的[{buy_id}]")
                     #心跳测试，防止中午时段socket断开
                     elif self.context.operation_id_recive == 900:
                         print(f"this is heartbeat")
@@ -1684,6 +1460,25 @@ class LoadedIDsInfo:
         self.multi_up_buy_need_check = True # 用于开启脚本后的检查，比如当下超过X%，就认为是需要处理（进一步等待下跌到X以下，加一次cur_count)
         self.multi_up_total_count = 1 # 总共需要检查的次数，虽然目前需求是1，但是直接做成多次的以后方便
         self.multi_up_cur_count = 0
+
+class TargetInfo:
+    def __init__(self):
+        self.name = ""
+        self.hold = 0
+        self.price = 0
+        self.first_record_flag = False
+        self.pre_close = 0
+        self.vwap = 0
+        self.upper_limit = 0 # 涨停价
+        self.lower_limit = 0
+        self.suspended = False # 是否停牌
+        self.sold_flag = False
+        self.sold_price = 0 # 虚拟卖出时的记录价格，用于统计信息
+        self.sold_mv = 0 # 虚拟卖出后锁定的市值
+        self.fpr = -1 # 浮动盈亏缓存
+        self.total_holding = 0 # 这里的总量并不从pos中取，而是从完成（部成）的order中记录，因为我发现完全用pos中的有时候数据更新不及时，比如部成的数量都已经显示有10000股了，且已经输出到日志中，但是紧接着马上取pos中的持仓，却还没有更新到该值，取出来可能是4，5000，虽然这个发生的几率很小，但是还是需要处理
+        self.partial_holding = 0 # 记录部成的临时值
+        self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
 
 if __name__ == '__main__':
     '''

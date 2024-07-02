@@ -142,7 +142,7 @@ class TestClientUI(QMainWindow):
 
     def connect_server(self):
         #"8.137.48.212" - 127.0.0.1 # 线程Server 正式服12345, 调试服12346
-        self.send_data_to_server("8.137.48.212", 12346, {"name": "Alice", "message": "Hello, server!"})
+        self.send_data_to_server("8.137.48.212", 12347, {"name": "Alice", "message": "Hello, server!"})
  
     def send_data_to_server(self, server_ip, server_port, data):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -220,7 +220,7 @@ class TestClientUI(QMainWindow):
         else:
             buy_id = int(input_box_str)
         
-        reply = QMessageBox.question(None, '确认', f'您确定要急速买入标的[{buy_id}]---[{buy_amount}]w吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = QMessageBox.question(None, '确认', f'您确定要急速买入标的[{buy_id}]-[{buy_amount}]w吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
         
