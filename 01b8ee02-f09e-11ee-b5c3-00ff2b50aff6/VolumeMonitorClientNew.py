@@ -14,6 +14,7 @@ import subprocess
 import re
 import uuid
 
+OP_ID_S2C_HISTORY_DATA_SEND = 101
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102
 
 OP_ID_C2S_QUICK_BUY = 120
@@ -1780,6 +1781,7 @@ class ReciveQThread(QThread):
                     eob_time_bytes = self.client_socket.recv(4)
                     eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
                     eob_time = self.re_complement_time(eob_time_str)
+
                     # print(f"eob_time:{eob_time}")
 
                     #====测试没问题后删掉注释中代码
@@ -1910,7 +1912,15 @@ class ReciveQThread(QThread):
     #拼接hh:mm:ss+8:00
     def re_complement_time(self, str_time):
         # 使用列表推导式和字符串切片来拆解字符串  
-        chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]  
+        # chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]  
+        #这里通过长度来判断是否需要补全，例如93103代表 9:30:03，就需要补全，其实只有9点需要补全
+        if len(str_time) == 5:
+            chunks_1 = str_time[0]
+            chunks_2 = str_time[1:]
+            print(f"{chunks_1}::{chunks_2}")
+            chunks = [chunks_2[i:i+2] for i in range(0, len(chunks_2), 2)]  
+        else:
+            chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]
 
         temp_split_joint_letter = ''
 
@@ -1921,6 +1931,10 @@ class ReciveQThread(QThread):
             else:
                 temp_split_joint_letter = temp_split_joint_letter + ':' + letter
             index += 1
+
+        #在补全一下，例如9点--补全到09
+        if len(temp_split_joint_letter) == 5:
+            temp_split_joint_letter = '0' + chunks_1 + ":" + temp_split_joint_letter
 
         return temp_split_joint_letter + '+08:00'
 

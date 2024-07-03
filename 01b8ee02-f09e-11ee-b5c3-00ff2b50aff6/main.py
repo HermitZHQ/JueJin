@@ -26,8 +26,10 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-SECTION_HISTORY_STOCK_COUNT = 3
+SECTION_HISTORY_STOCK_COUNT = 10
+HISTORY_DATA_SEND_COUNT = 2
 
+OP_ID_S2C_HISTORY_DATA_SEND = 101
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102
 
 OP_ID_C2S_QUICK_BUY = 120
@@ -118,7 +120,7 @@ def init(context):
 
     # 线程Server 正式服12345, 调试服12346   3
     # 这个是新版新版新版新版新版新版
-    main_server_thread = MainServerTreadC("0.0.0.0", 12345, context)
+    main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
     main_server_thread.start()
 
     # 关盘后，模拟on_bar用
@@ -332,6 +334,13 @@ def init_client_one_time(context):
                             off_set += context.chunk_size
                         #=====================================
 
+                        #这里接着改，尝试改为二进制传输==========
+                        #包头+4，一次传输数量+4,(4+4+4+4+4)+(4+4+4+4+4)+.......(*传输数量)
+                        #可以用for循环来拼接
+                        
+
+                        #=====================================
+
                         #这里不等一下，json就会报错，暂时不知道为什么
                         # time.sleep(0.02)
                         # client_socket.sendall(his_data_dic_json.encode('utf-8'))
@@ -403,6 +412,12 @@ def init_client_one_time(context):
                             client_socket.sendall(chunk.encode())
 
                             off_set += context.chunk_size
+                        #=====================================
+
+                        #这里接着改，尝试改为二进制传输==========
+
+
+
                         #=====================================
 
                         val.is_init = True
@@ -1166,11 +1181,18 @@ def send_message_second_method(client_socket, context):
             symbol_num = temp_symbol_num.to_bytes(4, byteorder='big')
 
             #4-4 int32
-            temp_amount = int(valume['amount'])
+            temp_amount_without_dot = str(valume['amount']).split(".")
+            temp_amount = int(temp_amount_without_dot[0])
             amount = temp_amount.to_bytes(4, byteorder='big')
 
             #5-4 int32
-            temp_eob_arr = valume['eob'].split(" ")
+            if valume['eob'] == None:
+                context_now = context.now
+                temp_eob_arr = str(context_now).split(" ")
+            else:
+                temp_eob_arr = valume['eob'].split(" ")
+
+            # temp_eob_arr = valume['eob'].split(" ")
             temp_eob_arr_date_arr = temp_eob_arr[0].split("-")
             temp_temp_date = ''
             for chunk in temp_eob_arr_date_arr:
@@ -1195,6 +1217,7 @@ def send_message_second_method(client_socket, context):
             # client_socket.sendall(OP_ID_S2C_REAL_TIME_DATA_SEND.to_bytes(4))
             client_socket.sendall(OP_ID_S2C_REAL_TIME_DATA_SEND.to_bytes(4, byteorder='big') + symbol_letter + symbol_num + amount + eob_date + eob_time)
 
+            # print(f"{temp_symbol_num}:{temp_amount}")
 
     except ConnectionResetError:
          client_socket.close()
@@ -1279,8 +1302,8 @@ def load_ids(context):
             print(f'读取IDs配置错误：{str_tmp}')
 
         if buy_flag == False:
-            for item in context.subscription_stock_arr:
-                print(f"{item}")
+            # for item in context.subscription_stock_arr:
+            #     print(f"{item}")
             print(f"init total ids : {len(context.subscription_stock_arr)}")
             print(f"init ids down=========================")
             break
@@ -1352,12 +1375,8 @@ def translate_letter_to_int(stork_letter):
     temp_split_joint_letter = ''
 
     for letter in chunks:
-        print(f"{letter}")
         temp_int_letter = translate_letter_one_by_one(letter)
-        print(f"{temp_int_letter}")
         temp_split_joint_letter = temp_split_joint_letter + temp_int_letter
-
-    # print(f"int letter::{temp_split_joint_letter}")
 
     return int(temp_split_joint_letter)
 
