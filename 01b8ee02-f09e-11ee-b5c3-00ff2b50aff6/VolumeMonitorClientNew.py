@@ -14,6 +14,7 @@ import subprocess
 import re
 import uuid
 
+OP_ID_S2C_STOCK_NAME_SEND = 100
 OP_ID_S2C_HISTORY_DATA_SEND = 101
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102
 
@@ -839,14 +840,6 @@ class TestClientUI(QMainWindow):
 
         calculate_percent = self.calculate_percent_mathod(his_date.amount, cur_date.amount)
 
-        #这里为重新排序记录的数据，移动到w6里，根据w6排序
-        # if calculate_percent == 'N':
-        #     self.order_widget_dic[symbol] = -1000.0
-        # else:
-        #     self.order_widget_dic[symbol] = calculate_percent
-
-        #===============================================
-
         #在这里设置一个临时变量，用于获取w2里面的当前时间，方便后面在w4里排序
         temp_w2_last_time = ''
 
@@ -886,15 +879,6 @@ class TestClientUI(QMainWindow):
             #1分钟到达预设值，添加到w3
             temp_last_calculate_percent = self.calculate_percent_mathod(temp_last_his_amount, temp_last_cur_amount)
 
-            #重新排序=======================
-            #这里记录每一次灵活设置切换到下一阶段时，上一阶段的值，以便后面排序
-            #这里需要改成1分钟重新排序，把这个搬到上面w2里面，试试
-            #这里还需要改，更改为根据灵活数据，每分钟拍一次序,把这个放到w4最后的else里面试试
-            # if temp_last_calculate_percent == 'N':
-            #     self.order_widget_dic[symbol] = -1000.0
-            # else:
-            #     self.order_widget_dic[symbol] = temp_last_calculate_percent
-
             if temp_last_calculate_percent != 'N':
                 #float后面的50后面需要改为在ui上可设置
                 if float(temp_last_calculate_percent) >= float(1000):
@@ -903,20 +887,6 @@ class TestClientUI(QMainWindow):
 
                     self.w3.stock_widget_dic[symbol].layout.addWidget(temp_last_data_label)
 
-                    #重新排序
-                    # sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
-
-                    # for child_widget in self.child_widget_arr:
-
-                    #     for key, val in child_widget.stock_widget_dic.items():
-                    #         # 先移除widget，用于后面重新添加排序后得内容
-                    #         child_widget.bottom_update_widget_layout.removeWidget(val.widget)
-
-                    #     #重新添加排序过后的widget
-                    #     for key, val in sorted_items_desc:
-                    #         child_widget.bottom_update_widget_layout.addWidget(child_widget.stock_widget_dic[key].widget)
-
-            # temp_current_label_info = CurrentLabelInfo(data_label, cur_date.eob, cur_d_a, his_d_a)
             self.w2.stock_current_label_dic[symbol] = CurrentLabelInfo(data_label, cur_date.eob, cur_d_a, his_d_a)
             self.w2.stock_time_labelinfo_dic[symbol][cur_date.eob] = CurrentLabelInfo(data_label, cur_date.eob, cur_d_a, his_d_a)
 
@@ -941,8 +911,8 @@ class TestClientUI(QMainWindow):
             self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: red; }')  
         elif calculate_percent < 0:
             self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: green; }')  
-        #根据历史数据设置label颜色
-        if int(his_date.amount) == 0:
+        #根据历史数据设置label颜色,这里要先转化为float再转化为int
+        if int(float(his_date.amount)) == 0:
             self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: blue; }')
         if self.w2.stock_current_label_dic[symbol].amount == 0:
             self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: grey; }')
@@ -993,11 +963,6 @@ class TestClientUI(QMainWindow):
 
         #这里需要分情况进入灵活运算里面，当初始化当日数据时候，当实时运算时
         if self.is_can_statistics == True and symbol in self.w4.stock_current_label_dic.keys():
-            # if self.is_complate_all_init == True:
-            #     is_can_in_agility = datetime.strptime(cur_date.eob, "%H:%M:%S").time() >= datetime.strptime(self.w4.stock_current_label_dic[symbol].current_time, "%H:%M:%S").time()
-            # else:
-            #     is_can_in_agility = datetime.strptime(cur_date.eob, "%H:%M:%S").time() > datetime.strptime(self.w4.stock_current_label_dic[symbol].current_time, "%H:%M:%S").time()
-
             is_can_in_agility = datetime.strptime(cur_date.eob, "%H:%M:%S").time() > datetime.strptime(self.w4.stock_current_label_dic[symbol].current_time, "%H:%M:%S").time()
 
         if temp_is_can == 0 and self.is_can_statistics == False:
@@ -1044,10 +1009,6 @@ class TestClientUI(QMainWindow):
 
                     #实时运算时，这里要先算，历史数据运算时候，要后算，因为
                     #例如实时是10:25:01秒就会进这里，历史是10:26:00进这里
-                    #这里可能不需要了，因为现在例如10:25:01秒的数据，会被设定为10:26:00时间
-                    # if self.is_complate_all_init == True:
-                    #     temp_next_min += 1
-
                     #当时间在0-9分钟时，需要在前面加上0，例如1--01， 3--03
                     if len(str(temp_next_min)) == 1:
                         temp_next_min_to_str = '0' + str(temp_next_min)
@@ -1062,14 +1023,7 @@ class TestClientUI(QMainWindow):
                     else:
                         temp_time_str = str(get_now_hour) + ":" + temp_next_min_to_str + ":" + str(get_now_second)
 
-                    # temp_time_str = str(get_now_hour) + ":" + temp_next_min_to_str + ":" + str(get_now_second)
-
-                    # print(f"temp_next_min_to_str::{temp_next_min_to_str}|||one amount::{self.history_all_dic[symbol][temp_time_str].amount}")
-
                     agility_history_total_amount += float(self.history_all_dic[symbol][temp_time_str].amount)
-
-                    # if self.is_complate_all_init == False:
-                    #     temp_next_min += 1
 
                     temp_next_min += 1
 
@@ -1084,17 +1038,11 @@ class TestClientUI(QMainWindow):
                 self.w4.stock_current_label_dic[symbol] = CurrentLabelInfo(temp_agility_data_label, temp_time_str, cur_d_a, agility_history_total_amount)
                 self.w4.stock_time_labelinfo_dic[symbol][cur_date.eob] = CurrentLabelInfo(temp_agility_data_label, temp_time_str, cur_d_a, agility_history_total_amount)
                 
-            # 灵活时间，由此时段，进入下一时段，！！这里后期想办法简化下！！     >=
-            # datetime.strptime(cur_date.eob, "%H:%M:%S").time() > datetime.strptime(self.w4.stock_current_label_dic[symbol].current_time, "%H:%M:%S").time()
+            # 灵活时间，由此时段，进入下一时段，！！这里后期想办法简化下！！
             elif is_can_in_agility == True and datetime.strptime(cur_date.eob, "%H:%M:%S").time() != datetime.strptime('11:30:00', "%H:%M:%S").time():
                 
                 #可以尝试在这里补全，避免在w2里补全
                 #这里需要补全灵活分钟label,例如40分到41分，有些票来数据，就会添加灵活分钟当前label
-                #有些票如果这一分钟没来数据，到下一分钟41分后来，就会创建41-46(例灵活时间为5分钟)
-                #需要在这里补全
-                #这里重新改，应该是当is_can_statistics = True时，代表已经开始收集灵活时间数据，
-                #不从其他标的获取，根据设置的灵活时间，往前遍历判断正确的时间
-                #这里有问题，当例如11 21 或31 等等 没有数据时候 就会出错
                 if temp_is_can != 0:
 
                     temp_temp_is_can = -1
@@ -1153,10 +1101,6 @@ class TestClientUI(QMainWindow):
 
                     #实时运算时，这里要先算，历史数据运算时候，要后算，因为
                     #例如实时是10:25:01秒就会进这里，历史是10:26:00进这里
-                    #这里可能不需要了，因为现在例如10:25:01秒的数据，会被设定为10:26:00时间
-                    # if self.is_complate_all_init == True:
-                    #     temp_next_min += 1
-
                     #当时间在0-9分钟时，需要在前面加上0，例如1--01， 3--03
                     if len(str(temp_next_min)) == 1:
                         temp_next_min_to_str = '0' + str(temp_next_min)
@@ -1227,7 +1171,6 @@ class TestClientUI(QMainWindow):
                                     self.select_stork_list.append(key)
 
                             temp_for_select_stork_index += 1
-
 
 
         #根据百分比设置label颜色
@@ -1303,7 +1246,6 @@ class TestClientUI(QMainWindow):
                 #赋予历史数据中没有的当前时段的数据，然后更新UI，以防止UI少更新一次Label
                 if temp_c_hour_arr[0] not in temp_his_hour_arr:
                     self.current_data_dic[item].eob = now_time
-                    #self.current_data_dic[item].eob - temp_c_hour_arr[0]
                     temp_his_date = AnalysisHistoryData(item, 0, self.current_data_dic[item].eob, 'temp')
                     #for on_bar
                     # self.update_label_date(item, temp_his_date, self.current_data_dic[item])
@@ -1371,7 +1313,7 @@ class TestClientUI(QMainWindow):
                     temp_judge_s = datetime.strptime('11:30:00', "%H:%M:%S").time()
                     temp_judge_e = datetime.strptime('13:00:00', "%H:%M:%S").time()
 
-                    #防止超过11:30:00报错，尝试中。。。
+                    #防止超过11:30:00报错
                     if temp_judge_cur > temp_judge_s and temp_judge_cur < temp_judge_e:
                         temp_joint_history_time = str(datetime.strptime('11:30:00', "%H:%M:%S").time())
 
@@ -1428,30 +1370,9 @@ class TestClientUI(QMainWindow):
             print(f"send message to server init client had complate")
             self.is_complate_all_init = True
 
-            # for key, valume in self.w2.stock_time_labelinfo_dic.items():
-            #     for kk, vv in valume.items():
-            #         print(f"symbol::{key}||eob::{kk}||amount::{vv.amount}")
-            #     print(f"========================================================================")
-
         self.test_index += 1
         # print(f"self.test_index::{self.test_index}")
 
-        #跟新滚动条
-        #初始化完成之前，不做这个, 搬到上面去
-        # if temp_symbol != ' ' and self.is_complate_all_init == True:
-
-        #     if self.last_label_count != len(self.w2.label_with_time_dic[temp_symbol]):
-
-        #         if (not self.timer_init_flag):
-        #             self.timer_init_flag = True
-        #             self.timer = QTimer(self)
-        #             self.timer.timeout.connect(self.on_timer)
-        #             self.timer.start(50)
-
-        #         self.last_label_count = len(self.w2.label_with_time_dic[temp_symbol])
-
-        # main_window.temp_symbol_arr.clear()
-        # self.current_data_dic.clear()
         self.is_in_updating = False
 
     def time_for_update_scroll_bar(self):
@@ -1662,61 +1583,104 @@ class ReciveQThread(QThread):
                 print(f"{operation_id}")
 
                 #持续更新实时数据,此100暂时不使用
-                if operation_id == 100:
+                #这里更改为二进制接收标的名称       100
+                if operation_id == OP_ID_S2C_STOCK_NAME_SEND:
 
-                    single_data = self.client_socket.recv(4)
-                    current_data_len = int.from_bytes(single_data, byteorder='big')
-                    print(f"cur_data_len:{current_data_len}")
+                    name_count_bytes = self.client_socket.recv(4)
+                    name_count = int.from_bytes(name_count_bytes, byteorder='big')
 
-                    json_his_data = self.client_socket.recv(current_data_len)
-                    current_data = json.loads(json_his_data.decode('utf-8'))  
+                    for i in range(name_count):
+                        symbol_letter_bytes = self.client_socket.recv(4)
+                        symbol_num_bytes = self.client_socket.recv(4)
+                        symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
 
-                    main_window.temp_current_data_dic.clear()
-                    main_window.temp_current_data_dic = {key : AnalysisCurrentData.from_dict(value) for key, value in current_data.items()}
+                        symbol_name_length_bytes = self.client_socket.recv(2)
+                        symbol_name_length = int.from_bytes(symbol_name_length_bytes, byteorder='little')
 
-                    for key, valume in main_window.temp_current_data_dic.items():
-                        main_window.temp_symbol_arr.append(valume.symbol)
-                        main_window.current_data_dic[key] = valume
-                        print(f"++++++++++++++++++++++++++++++++++++++++++++++{len(main_window.temp_symbol_arr)}")
+                        symbol_name_bytes = self.client_socket.recv(symbol_name_length)
+                        name = symbol_name_bytes.decode('utf-8')
 
-                    if len(main_window.temp_symbol_arr) == len(main_window.symbol_arr):
-                        main_window.teat_thread_2()
+                        # print(f"{symbol}:{name}")
 
-                    print(f"{main_window.current_data_dic}")
+                        main_window.name_dic[symbol] = name
 
-                #初始化窗口
-                elif operation_id == 101:
+                    #====================
+                    # single_data = self.client_socket.recv(4)
+                    # current_data_len = int.from_bytes(single_data, byteorder='big')
+                    # print(f"cur_data_len:{current_data_len}")
 
-                    single_data = self.client_socket.recv(4)
-                    his_data_len = int.from_bytes(single_data, byteorder='big')
-                    print(f"his_data_len:{his_data_len}")
+                    # json_his_data = self.client_socket.recv(current_data_len)
+                    # current_data = json.loads(json_his_data.decode('utf-8'))  
 
-                    #改为分段接收===================================
-                    remaining = his_data_len  
-                    while remaining > 0:  
+                    # main_window.temp_current_data_dic.clear()
+                    # main_window.temp_current_data_dic = {key : AnalysisCurrentData.from_dict(value) for key, value in current_data.items()}
 
-                        chunk = self.client_socket.recv(min(remaining, 1024))  # 最多接收1024字节  
-                        
-                        if not chunk:  
-                            break  # 如果连接关闭或没有数据，则退出循环  
+                    # for key, valume in main_window.temp_current_data_dic.items():
+                    #     main_window.temp_symbol_arr.append(valume.symbol)
+                    #     main_window.current_data_dic[key] = valume
+                    #     print(f"++++++++++++++++++++++++++++++++++++++++++++++{len(main_window.temp_symbol_arr)}")
 
-                        self.recive_data += chunk.decode()
-                        remaining -= len(chunk)  
+                    # if len(main_window.temp_symbol_arr) == len(main_window.symbol_arr):
+                    #     main_window.teat_thread_2()
 
-                    print(f"self.recive_data length::{len(self.recive_data)} ")
-                    #===============================================
+                    # print(f"{main_window.current_data_dic}")
+                    #====================
 
-                    his_data = json.loads(self.recive_data.encode('utf-8'))  
-                    shdf_dic = {key : AnalysisHistoryData.from_dict(value) for key, value in his_data.items()}
+                #初始化窗口     101
+                elif operation_id == OP_ID_S2C_HISTORY_DATA_SEND:
+                    
+                    temp_history_data_list = []
+
+                    # 2-4 int32
+                    history_data_count_bytes = self.client_socket.recv(4)
+                    history_data_count = int.from_bytes(history_data_count_bytes, byteorder='big')
+                    print(f"history_data_count::{history_data_count}")
+
+                    had_recive_count = 0
+
+                    #这个接收循环是有问题的，应该不是这样接收的
+                    for i in range(history_data_count):
+                        history_recive_count_bytes = self.client_socket.recv(4)
+                        history_recive_count = int.from_bytes(history_recive_count_bytes, byteorder='big')
+
+                        for n in range(history_recive_count):
+                            symbol_letter_bytes = self.client_socket.recv(4)
+                            symbol_num_bytes = self.client_socket.recv(4)
+                            symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
+
+                            amount_bytes = self.client_socket.recv(4)
+                            amount = self.translate_amount_in_bytes(amount_bytes)
+
+                            eob_date_bytes = self.client_socket.recv(4)
+                            eob_time_bytes = self.client_socket.recv(4)
+                            eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
+
+                            # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
+                            temp_history_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
+
+                        had_recive_count += history_recive_count
+                        if had_recive_count == history_data_count:
+                            break
+
+                    # return
+
+                    shdf_dic = {}
+                    #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
+                    t_i = 0
+                    for item in temp_history_data_list:
+                        shdf_dic[t_i] = item
+                        t_i += 1
 
                     print(f"shdf_dic::@{len(shdf_dic)}")
 
                     for key, value in shdf_dic.items():
-                       if value.symbol not in main_window.history_all_dic.keys():
+                        # print(f"{key}")
+                        if value.symbol not in main_window.history_all_dic.keys():
                            
                             #遍历出标的代码，单独装进一个字典中
                             main_window.symbol_arr.append(value.symbol)
-                            main_window.name_dic[value.symbol] = value.name
+                            #上面100里面已经装填了，测试没问题就删了
+                            # main_window.name_dic[value.symbol] = value.name
 
                             temp_history_time_arr = value.eob.split(" ")
                             temp_h_hour_arr = temp_history_time_arr[1].split("+")
@@ -1727,8 +1691,7 @@ class ReciveQThread(QThread):
 
                             main_window.history_all_dic[value.symbol] = temp_dic
 
-
-                       else:
+                        else:
                             #这里遍历出每一个标的代码对应的历史数据，数据类型是 一个key对应一个dic
 
                             temp_history_time_arr = value.eob.split(" ")
@@ -1737,17 +1700,19 @@ class ReciveQThread(QThread):
                             shdf_dic[key].eob = temp_h_hour_arr[0]
                             main_window.history_all_dic[value.symbol][temp_h_hour_arr[0]] = value
 
+                        # print(f"{value}")
+
                     #注意！！这里socket如果出问题，也搬到104最后面去
                     main_window.server_sokcet = self.client_socket
 
-                    # main_window.teat_thread_1()
-                    #这里尝试通过用发送信号的方式，替换掉通过线程的方式初始化导致的，当大量数据过来的时候，会掉数据，看看能不能解决
                     #放在104最后面试试
                     # main_window.is_init_window = True
                     # main_window.has_init_window_single.emit(main_window.is_init_window)
 
                 #持续更新实时数据,以秒为单位    102
                 elif operation_id == OP_ID_S2C_REAL_TIME_DATA_SEND:
+
+                    #将解析symbol, amount, eob，分别封装到方法里，方便其他地方调用
 
                     #2-4 int32
                     symbol_letter_bytes = self.client_socket.recv(4)
@@ -1781,35 +1746,14 @@ class ReciveQThread(QThread):
                     eob_time_bytes = self.client_socket.recv(4)
                     eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
                     eob_time = self.re_complement_time(eob_time_str)
-
                     # print(f"eob_time:{eob_time}")
 
-                    #====测试没问题后删掉注释中代码
-                    # single_data = self.client_socket.recv(4)
-                    # current_data_len = int.from_bytes(single_data, byteorder='big')
-                    # #print(f"cur_data_len:{current_data_len}")
-
-                    # json_his_data = self.client_socket.recv(current_data_len)
-                    # current_data = json.loads(json_his_data.decode('utf-8')) 
-
-                    # #print(f"current_data::{current_data}")
-
-                    # main_window.temp_current_data_dic.clear()
-                    # main_window.temp_current_data_dic = {key : AnalysisSecondData.from_dict(value) for key, value in current_data.items()}
-                    #====
-                    
                     symbol = symbol_letter + '.' + symbol_num
                     eob = eob_date + " " + eob_time
-
-                    #====测试没问题后删掉注释中代码
-                    # for key, valume in main_window.temp_current_data_dic.items():
-                    #     temp_current_data = valume
-                    #====
 
                     temp_current_data = AnalysisSecondData(symbol, amount, eob)
 
                     #======================list方式,等待刷新
-
                     #现在需要无论什么时候开启客户端，都有前面的数据
                     #这里现在需要设置一个bool，当客户端还在初始化时候，就需要接收数据
                     #以免再初始化的时候，漏掉1s左右的数据
@@ -1824,9 +1768,6 @@ class ReciveQThread(QThread):
                             temp_item = item
                             main_window.wait_for_update_list.append(temp_item)    
                             print(f"put in update list::{temp_item.symbol}||{temp_item.amount}||{temp_item.eob}")
-
-                        # for item in main_window.wait_for_update_list:
-                        #     print(f"begin update::{item.symbol}||{item.amount}||{item.eob}")
 
                         #清空临时list,准备接新的数据
                         main_window.temp_wait_for_update_list.clear()
@@ -1909,6 +1850,42 @@ class ReciveQThread(QThread):
 
                     # main_window.teat_thread_1()
 
+
+    #解析标的时间
+    def translate_eob_in_bytes(self, eob_date_bytes, eob_time_bytes):
+        eob_date_str = str(int.from_bytes(eob_date_bytes, byteorder='big'))
+        eob_date = self.re_complement_date(eob_date_str)
+
+        eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
+        eob_time = self.re_complement_time(eob_time_str)
+
+        eob = eob_date + " " + eob_time
+
+        return eob
+
+    #解析标的成交金额
+    def translate_amount_in_bytes(self, amount_bytes):
+        amount = str(round(float(int.from_bytes(amount_bytes, byteorder='big')), 2))
+        return amount
+
+    #解析标的名称
+    def translate_symbol_in_bytes(self, symbol_letter_bytes, symbol_num_bytes):
+
+        symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+        symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+
+        symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+        #___这里需要补全标的代码前面的0
+        if len(symbol_num) < 6:
+            need_complement = 6 - len(symbol_num)
+            for i in range(need_complement):
+                i += 1
+                symbol_num = '0' + symbol_num
+
+        symbol = symbol_letter + '.' + symbol_num
+
+        return symbol
+
     #拼接hh:mm:ss+8:00
     def re_complement_time(self, str_time):
         # 使用列表推导式和字符串切片来拆解字符串  
@@ -1917,7 +1894,7 @@ class ReciveQThread(QThread):
         if len(str_time) == 5:
             chunks_1 = str_time[0]
             chunks_2 = str_time[1:]
-            print(f"{chunks_1}::{chunks_2}")
+            # print(f"{chunks_1}::{chunks_2}")
             chunks = [chunks_2[i:i+2] for i in range(0, len(chunks_2), 2)]  
         else:
             chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]
