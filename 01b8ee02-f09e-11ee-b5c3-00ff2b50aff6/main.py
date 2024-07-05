@@ -576,12 +576,18 @@ def init_client_fragments(context):
                 if_complete = 1
 
 def on_tick(context, tick):
-    
-    return
 
     # 更新对应标的的一些保存信息
     if tick.symbol in context.ids_info_dict.keys():
         context.ids_info_dict[tick.symbol].price = tick.price
+        
+        if context.ids_info_dict[tick.symbol].name == "":
+            info = get_instruments(symbols = tick.symbol, skip_suspended = False, df = True)
+            # empty情况一般就是ST的股票，直接先跳过不处理
+            if info.empty:
+                print(f"[init][{tick.symbol}]get cache info null, this should not happen[可能是停牌]......")
+            else:
+                context.ids_info_dict[tick.symbol].name = info.sec_name[0]
         
         # 持仓不要一直获取，下面拿pos的函数延迟很大，需要特别注意！！！
         if context.ids_info_dict[tick.symbol].hold_available == 0:
@@ -595,6 +601,8 @@ def on_tick(context, tick):
             else:
                 context.ids_info_dict[tick.symbol].hold_available = pos.available_now
                 # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
+    
+    return
 
     #客户端断开连接后，从socket_dic中移除相应sokcet
     if len(context.delete_temp_adress_arr) > 0:
@@ -787,6 +795,49 @@ def on_bar(context, bars):
             for k,v in context.socket_dic.items():
                 send_message_method(v, context)
 
+# 委托状态更新事件
+# 响应委托状态更新事情，下单后及委托状态更新时被触发。
+#注意：
+# 1、交易账户重连后，会重新推送一遍交易账户登录成功后查询回来的所有委托
+# 2、撤单拒绝，会推送撤单委托的最终状态
+'''
+order.status
+OrderStatus_Unknown = 0
+OrderStatus_New = 1                   # 已报
+OrderStatus_PartiallyFilled = 2       # 部成
+OrderStatus_Filled = 3                # 已成
+OrderStatus_Canceled = 5              # 已撤
+OrderStatus_PendingCancel = 6         # 待撤
+OrderStatus_Rejected = 8              # 已拒绝
+OrderStatus_Suspended = 9             # 挂起 （无效）
+OrderStatus_PendingNew = 10           # 待报
+OrderStatus_Expired = 12              # 已过期
+'''
+# 处理订单状态变化函数--------
+def on_order_status(context, order):
+    #print('--------on_order_status')
+    #print(order)
+
+    name = ""
+    if order.symbol in context.ids_info_dict.keys():
+        name = context.ids_info_dict[order.symbol].name
+
+    if order.ord_rej_reason != 0:
+        log(f"{order.symbol}:{name} 委托已被拒绝！具体原因如下：{order.ord_rej_reason_detail}")
+        # 被拒绝后，可以消除订单的记录
+        if order.symbol in context.client_order.keys():
+            del context.client_order[order.symbol]
+
+    # 订单全部成交的话（status == 3），可以消除订单记录
+    if order.status == OrderStatus_Filled:
+        # 更新买卖方向的相关信息
+        if order.side == OrderSide_Sell:
+            log(f'{order.symbol}:{name} 所有委托订单已成[卖出]，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
+        elif order.side == OrderSide_Buy:
+            log(f'{order.symbol}:{name} 所有委托订单已成[买入]，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
+        
+        if order.symbol in context.client_order.keys():
+            del context.client_order[order.symbol]
 
 #拿到前一天的去全部历史数据，以每分钟为间隔
 def test_get_data(context):
@@ -1642,6 +1693,19 @@ class ReciveClientThreadC(threading.Thread):
         str_symbol = self.change_stock_int_to_string(buy_id)
         buy_amount = int.from_bytes(quick_buy_amount, byteorder='little')
         
+        # 如果client order还没有处理完，也返回
+        if str_symbol in self.context.client_order.keys():
+            print(f'{str_symbol}订单没有处理完毕，直接返回')
+            return
+        
+        leftCash = self.context.account().cash['available'] # 余额
+        leftCash = float('%.2f' % leftCash)
+        leftCash_int = int(leftCash)
+        if ((buy_amount * 10000) > leftCash_int) and (leftCash_int > 0):
+            buy_amount = math.floor(leftCash_int / 10000);
+        # totalCash = self.context.account().cash['nav'] # 总资金
+        # totalCash = float('%.2f' % totalCash)
+        
         print(f"准备开始处理急速购买标的[{str_symbol}]-[{buy_amount}]w")
         base_num = 1
         # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
@@ -1656,19 +1720,37 @@ class ReciveClientThreadC(threading.Thread):
             base_num = 2
         
         # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求）
-        order_volume(symbol=str_symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
+        log(f"------try buy with symbol[{str_symbol}]--[{base_num * 100}]")
+        list_order = order_volume(symbol=str_symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
+        
+        # 记录order的client id，避免出现之前的重复购买
+        # 只有当id在order status的回掉中，出现已成（不是部成）或者被拒绝的时候，才开放再次购买
+        # 需要一定的数据格式，记录在context全局变量中，这样不会被擦除
+        # 数据信息：{symbol:[list_order]}，直接把list_order一下装进去吧，也不用费事单独拆一些数据了
+        self.context.client_order[str_symbol] = list_order
         
     def socket_receive_quick_sell(self):
         quick_sell_id = self.client_socket.recv(4)
         buy_id = int.from_bytes(quick_sell_id, byteorder='big')
         str_symbol = self.change_stock_int_to_string(buy_id)
         
+        # 如果client order还没有处理完，也返回
+        if str_symbol in self.context.client_order.keys():
+            print(f'{str_symbol}订单没有处理完毕，直接返回')
+            return
+        
         sell_num = 100000
         if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].hold_available > 0):
             sell_num = self.context.ids_info_dict[str_symbol].hold_available
         
         # 直接使用市价卖出，则可以不指定卖出价格（居然根据佳哥需求）
-        order_volume(symbol=str_symbol, volume=sell_num, side=OrderSide_Sell, order_type=OrderType_Market, position_effect=PositionEffect_Close)
+        list_order = order_volume(symbol=str_symbol, volume=sell_num, side=OrderSide_Sell, order_type=OrderType_Market, position_effect=PositionEffect_Close)
+        
+        # 记录order的client id，避免出现之前的重复购买
+        # 只有当id在order status的回掉中，出现已成（不是部成）或者被拒绝的时候，才开放再次购买
+        # 需要一定的数据格式，记录在context全局变量中，这样不会被擦除
+        # 数据信息：{symbol:[list_order]}，直接把list_order一下装进去吧，也不用费事单独拆一些数据了
+        self.context.client_order[str_symbol] = list_order
 
     def run(self):
         #主动停止线程while not self._stop_event.is_set():
