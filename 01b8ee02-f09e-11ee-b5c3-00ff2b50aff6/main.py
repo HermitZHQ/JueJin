@@ -26,12 +26,14 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-SECTION_HISTORY_STOCK_COUNT = 10
+SECTION_HISTORY_STOCK_COUNT = 50
 HISTORY_DATA_SEND_COUNT = 50
+HISTORY_TODAY_DATA_SEND_COUNT = 50
 
 OP_ID_S2C_STOCK_NAME_SEND = 100
 OP_ID_S2C_HISTORY_DATA_SEND = 101
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102
+OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104
 
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
@@ -138,9 +140,9 @@ def simulation_on_bar(context):
 
     test_count_index = 0
 
-    test_time_d = '2024-06-17 '
-    test_time_h = '14'
-    test_time_m = '20'
+    test_time_d = '2024-07-05 '
+    test_time_h = '10'
+    test_time_m = '00'
     test_time_s = '00.00013+08:00'
 
     test_time_time = test_time_d + test_time_h + ':' + test_time_m + ':' + test_time_s
@@ -292,27 +294,38 @@ def init_client_one_time(context):
 
                         for key, valume in context.temp_matching_dic.items():
 
-                            temp_symbol_letter = 0
-                            temp_symbol_num = 0
+                            #这里报错，暂时不太清，将这里改成字符串发送
 
-                            #3-4 int32
-                            temp_symbol_arr = key.split(".")
-                            temp_symbol_letter = translate_letter_to_int(temp_symbol_arr[0])
-                            symbol_letter_bytes = temp_symbol_letter.to_bytes(4, byteorder='big')
+                            # temp_symbol_letter = 0
+                            # temp_symbol_num = 0
 
-                            #4-4 int32
-                            temp_symbol_num = int(temp_symbol_arr[1])
-                            symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
+                            # #3-4 int32
+                            # temp_symbol_arr = key.split(".")
+                            # temp_symbol_letter = translate_letter_to_int(temp_symbol_arr[0])
+                            # symbol_letter_bytes = temp_symbol_letter.to_bytes(4, byteorder='big')
 
-                            #6-? 中文名字byte
-                            name_bytes = valume.encode('utf-8')
-                            #5-4 int16 中文名字byte长度并转化为byte
-                            name_length = len(name_bytes)
-                            name_length_bytes = np.int16(name_length)
+                            # #4-4 int32
+                            # temp_symbol_num = int(temp_symbol_arr[1])
+                            # symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
 
-                            ready_send_name_bytes = symbol_letter_bytes + symbol_num_bytes + name_length_bytes + name_bytes
+                            # #6-? 中文名字byte
+                            # name_bytes = valume.encode('utf-8')
+                            # #5-4 int16 中文名字byte长度并转化为byte
+                            # name_length = len(name_bytes)
+                            # name_length_bytes = np.int16(name_length)
 
-                            client_socket.sendall(ready_send_name_bytes)
+                            # ready_send_name_bytes = symbol_letter_bytes + symbol_num_bytes + name_length_bytes + name_bytes
+
+                            # client_socket.sendall(ready_send_name_bytes)
+
+                            #============================================================
+
+                            ready_send_name_str = key + "+" + valume
+                            send_data = ready_send_name_str.encode('utf-8')
+                            send_length = len(send_data).to_bytes(4, byteorder='big')
+                            client_socket.sendall(send_length)
+                            print(f"{ready_send_name_str}")
+                            client_socket.sendall(send_data)
 
 
                         # return
@@ -463,32 +476,72 @@ def init_client_one_time(context):
                         #     context.ready_second_for_send.append(PackHistoryDataFrame(key, value, second_time_eob, 'his_today_data').to_dict())
                         #     temp_num += 1
 
-                        his_today_data_dic_json = json.dumps(context.his_today_data_dic)
-                        htddj_len = len(his_today_data_dic_json.encode('utf-8'))
-                        print(f"htddj_len:{htddj_len}")
+                        #将今日历史数据改为二进制传输   HISTORY_TODAY_DATA_SEND_COUNT
 
-                        context.operation_id_send = 104
-                        operation_id_byte = context.operation_id_send.to_bytes(4, byteorder='big')
-                        client_socket.sendall(operation_id_byte)
+                        # his_today_data_dic_json = json.dumps(context.his_today_data_dic)
+                        # htddj_len = len(his_today_data_dic_json.encode('utf-8'))
+                        # print(f"htddj_len:{htddj_len}")
 
-                        htddj_len_byte = htddj_len.to_bytes(4, byteorder='big')
-                        client_socket.sendall(htddj_len_byte)
+                        # context.operation_id_send = 104
+                        # operation_id_byte = context.operation_id_send.to_bytes(4, byteorder='big')
+                        # client_socket.sendall(operation_id_byte)
+
+                        # htddj_len_byte = htddj_len.to_bytes(4, byteorder='big')
+                        # client_socket.sendall(htddj_len_byte)
 
                         #改为分段传输=========================
-                        off_set = 0
+                        # off_set = 0
 
-                        while off_set < htddj_len:
+                        # while off_set < htddj_len:
 
-                            chunk = his_today_data_dic_json[off_set:off_set + context.chunk_size]
+                        #     chunk = his_today_data_dic_json[off_set:off_set + context.chunk_size]
 
-                            client_socket.sendall(chunk.encode())
+                        #     client_socket.sendall(chunk.encode())
 
-                            off_set += context.chunk_size
+                        #     off_set += context.chunk_size
                         #=====================================
 
                         #这里接着改，尝试改为二进制传输==========
 
+                        #1-4 int32 包头
+                        #OP_ID_S2C_HISTORY_TODAY_DATA_SEND
+                        
+                        #2-4 int32 历史数据数量总数
+                        history_today_data_count = len(context.his_today_data_dic)
+                        history_today_data_count_bytes = history_today_data_count.to_bytes(4, byteorder="big")
 
+                        ready_send_today_data_bytes = OP_ID_S2C_HISTORY_TODAY_DATA_SEND.to_bytes(4, byteorder="big") + history_today_data_count_bytes
+
+                        #先发送包头+数据总数
+                        client_socket.sendall(ready_send_today_data_bytes)
+
+                        arrive_index_for_send = 0
+                        residue_data_count = history_today_data_count
+                        #这里要判断一下，当dic中数据总数小于HISTORY_TODAY_DATA_SEND_COUNT时，这里又可能用不上，但还是加上吧
+                        if history_today_data_count < HISTORY_TODAY_DATA_SEND_COUNT:
+                            temp_send_count = history_today_data_count
+                        else:
+                            temp_send_count = HISTORY_TODAY_DATA_SEND_COUNT
+                        ready_send_today_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
+                        #拼接待发送的数据，byte类型
+                        for valume in context.his_today_data_dic.values():
+                            # print(f"{valume['symbol']}:{valume['amount']}:{valume['eob']}")
+                            history_data_bytes = translate_send_data_to_bytes(context, valume['symbol'], valume['amount'], valume['eob'])
+                            ready_send_today_data_bytes += history_data_bytes
+
+                            arrive_index_for_send += 1
+                            #达到发送的数量时，发送
+                            if arrive_index_for_send == temp_send_count:
+                                client_socket.sendall(ready_send_today_data_bytes)
+                                residue_data_count -= arrive_index_for_send
+                                arrive_index_for_send = 0
+
+                                if residue_data_count > HISTORY_TODAY_DATA_SEND_COUNT:
+                                    temp_send_count = HISTORY_TODAY_DATA_SEND_COUNT
+                                else:
+                                    temp_send_count = residue_data_count
+
+                                ready_send_today_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
 
                         #=====================================
 
@@ -513,7 +566,7 @@ def init_client_one_time(context):
             context.delete_client_socket_arr.append(del_init_member)
 
             # 关盘后，模拟on_bar用,用这个
-            #simulation_on_bar(context)
+            # simulation_on_bar(context)
 
 #这里尝试更改为线程，去拿取所有历史数据，包括当天历史数据, 暂时不考虑
 def init_client_when_get_all_data(context):
@@ -577,6 +630,8 @@ def init_client_fragments(context):
 
 def on_tick(context, tick):
 
+    # return
+
     # 更新对应标的的一些保存信息
     if tick.symbol in context.ids_info_dict.keys():
         context.ids_info_dict[tick.symbol].price = tick.price
@@ -601,8 +656,6 @@ def on_tick(context, tick):
             else:
                 context.ids_info_dict[tick.symbol].hold_available = pos.available_now
                 # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
-    
-    return
 
     #客户端断开连接后，从socket_dic中移除相应sokcet
     if len(context.delete_temp_adress_arr) > 0:
@@ -845,8 +898,11 @@ def test_get_data(context):
     yesterday_date = get_previous_or_friday_date()
     s_time = str(yesterday_date) + ' 9:15:0'
     e_time = str(yesterday_date) + ' 15:00:0'
-    test_s_time = '2024-06-07' + ' 9:15:0'
-    test_e_time = '2024-06-07' + ' 15:00:0'
+    test_s_time = '2024-07-04' + ' 9:15:0'
+    test_e_time = '2024-07-04' + ' 15:00:0'
+    #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉
+    # s_time = test_s_time
+    # e_time = test_e_time
 
     print(f"{s_time} To {e_time}")
     print(f"SECTION_HISTORY_STOCK_COUNT::{SECTION_HISTORY_STOCK_COUNT}")
@@ -949,8 +1005,11 @@ def get_history_data_in_today(context):
     s_time= str(get_now_time_arr_1[0]) + ' 09:15:00'
     e_time = str(get_now_time_arr_1[0]) + ' ' + str(get_now_hour) + ':' + str(get_now_min) + ':' + '00'
     #test为测试时用的时间
-    test_s_time = '2024-06-19' + ' ' + '09:15:00'
-    test_e_time = '2024-06-19' + ' ' + '15:00:00'
+    test_s_time = '2024-07-05' + ' ' + '09:15:00'
+    test_e_time = '2024-07-05' + ' ' + '10:00:00'
+    #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉
+    # s_time = test_s_time
+    # e_time = test_e_time
 
     #这里为获取当日9:25的集合进价时间   2
     s_25_today_time = str(get_now_time_arr_1[0]) + ' 09:24:57'

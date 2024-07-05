@@ -17,6 +17,7 @@ import uuid
 OP_ID_S2C_STOCK_NAME_SEND = 100
 OP_ID_S2C_HISTORY_DATA_SEND = 101
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102
+OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104
 
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
@@ -1589,20 +1590,30 @@ class ReciveQThread(QThread):
                     name_count_bytes = self.client_socket.recv(4)
                     name_count = int.from_bytes(name_count_bytes, byteorder='big')
 
+                    #这里报错，暂时不太清，将这里改成字符串接收
                     for i in range(name_count):
-                        symbol_letter_bytes = self.client_socket.recv(4)
-                        symbol_num_bytes = self.client_socket.recv(4)
-                        symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
+                        # symbol_letter_bytes = self.client_socket.recv(4)
+                        # symbol_num_bytes = self.client_socket.recv(4)
+                        # symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
 
-                        symbol_name_length_bytes = self.client_socket.recv(2)
-                        symbol_name_length = int.from_bytes(symbol_name_length_bytes, byteorder='little')
+                        # symbol_name_length_bytes = self.client_socket.recv(2)
+                        # symbol_name_length = int.from_bytes(symbol_name_length_bytes, byteorder='little')
 
-                        symbol_name_bytes = self.client_socket.recv(symbol_name_length)
-                        name = symbol_name_bytes.decode('utf-8')
+                        # symbol_name_bytes = self.client_socket.recv(1024)#symbol_name_length
+                        # name = symbol_name_bytes.decode('utf-8')
 
-                        # print(f"{symbol}:{name}")
+                        #==========================================
 
-                        main_window.name_dic[symbol] = name
+                        symbol_and_name_length_bytes = self.client_socket.recv(4)
+                        symbol_and_name_length = int.from_bytes(symbol_and_name_length_bytes, byteorder='big')
+
+                        symbol_and_name_recive = self.client_socket.recv(symbol_and_name_length)
+                        symbol_and_name = symbol_and_name_recive.decode('utf-8')
+                        symbol_name_arr = symbol_and_name.split("+")
+
+                        print(f"{symbol_name_arr[0]}:{symbol_name_arr[1]}")
+
+                        main_window.name_dic[symbol_name_arr[0]] = symbol_name_arr[1]
 
                     #====================
                     # single_data = self.client_socket.recv(4)
@@ -1661,8 +1672,6 @@ class ReciveQThread(QThread):
                         had_recive_count += history_recive_count
                         if had_recive_count == history_data_count:
                             break
-
-                    # return
 
                     shdf_dic = {}
                     #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
@@ -1780,65 +1789,90 @@ class ReciveQThread(QThread):
                         main_window.has_new_data_single.emit(main_window.is_has_new_data)
                         main_window.is_has_new_data = False
 
-                #当客户端未及时开启，需要初始化此时段之前的所有数据
-                elif operation_id == 104:
+                #当客户端未及时开启，需要初始化此时段之前的所有数据     104
+                elif operation_id == OP_ID_S2C_HISTORY_TODAY_DATA_SEND:
 
-                    single_data = self.client_socket.recv(4)
-                    his_today_data_len = int.from_bytes(single_data, byteorder='big')
-                    print(f"his_today_data_len:{his_today_data_len}")
+                    temp_history_today_data_list = []
+
+                    # 2-4 int32
+                    history_today_data_count_bytes = self.client_socket.recv(4)
+                    history_today_data_count = int.from_bytes(history_today_data_count_bytes, byteorder='big')
+                    print(f"history_data_count::{history_today_data_count}")
+
+                    had_recive_count = 0
+
+                    #这个接收循环是有问题的，应该不是这样接收的
+                    for i in range(history_today_data_count):
+                        history_today_recive_count_bytes = self.client_socket.recv(4)
+                        history_today_recive_count = int.from_bytes(history_today_recive_count_bytes, byteorder='big')
+
+                        for n in range(history_today_recive_count):
+                            symbol_letter_bytes = self.client_socket.recv(4)
+                            symbol_num_bytes = self.client_socket.recv(4)
+                            symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
+
+                            amount_bytes = self.client_socket.recv(4)
+                            amount = self.translate_amount_in_bytes(amount_bytes)
+
+                            eob_date_bytes = self.client_socket.recv(4)
+                            eob_time_bytes = self.client_socket.recv(4)
+                            eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
+
+                            # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
+                            temp_history_today_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
+
+                        had_recive_count += history_today_recive_count
+                        if had_recive_count == history_today_data_count:
+                            break
+
+
+                    # return
+
+                    # single_data = self.client_socket.recv(4)
+                    # his_today_data_len = int.from_bytes(single_data, byteorder='big')
+                    # print(f"his_today_data_len:{his_today_data_len}")
 
                     #改为分段接收===================================
-                    remaining = his_today_data_len  
-                    while remaining > 0:  
+                    # remaining = his_today_data_len  
+                    # while remaining > 0:  
 
-                        chunk = self.client_socket.recv(min(remaining, 1024))  # 最多接收1024字节  
+                    #     chunk = self.client_socket.recv(min(remaining, 1024))  # 最多接收1024字节  
                         
-                        if not chunk:  
-                            break  # 如果连接关闭或没有数据，则退出循环  
+                    #     if not chunk:  
+                    #         break  # 如果连接关闭或没有数据，则退出循环  
 
-                        self.recive_today_history_data += chunk.decode()
-                        remaining -= len(chunk)  
+                    #     self.recive_today_history_data += chunk.decode()
+                    #     remaining -= len(chunk)  
 
-                    print(f"self.recive_today_history_data length::{len(self.recive_today_history_data)} ")
+                    # print(f"self.recive_today_history_data length::{len(self.recive_today_history_data)} ")
                     #===============================================
 
-                    his_today_data = json.loads(self.recive_today_history_data.encode('utf-8')) 
+                    # his_today_data = json.loads(self.recive_today_history_data.encode('utf-8')) 
 
-                    thtd_dic = {key : AnalysisHistoryData.from_dict(value) for key, value in his_today_data.items()}
+                    # thtd_dic = {key : AnalysisHistoryData.from_dict(value) for key, value in his_today_data.items()}
+
+                    thtd_dic = {}
+                    #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
+                    t_i = 0
+                    for item in temp_history_today_data_list:
+                        thtd_dic[t_i] = item
+                        t_i += 1
 
                     print(f"thtd_dic::@{len(thtd_dic)}")
 
                     for key, value in thtd_dic.items():
-                       
-                    #    print(f"{key}:::{value.symbol}::{value.eob}")
-
+                    #    print(f"value.eob::{value.eob}")
                        if value.symbol not in main_window.history_today_all_dic.keys():
                            
-                            #当日历史数据不需要分割时间, 测试没有问题后，再删除注释掉的代码
-                            # temp_today_history_time_arr = value.eob.split(" ")
-                            # temp_h_hour_arr = temp_today_history_time_arr[1].split("+")
-
                             temp_dic = {}
 
-                            # thtd_dic[key].eob = temp_h_hour_arr[0] #shdf_dic
-                            # temp_dic[temp_h_hour_arr[0]] = value
-
-                            thtd_dic[key].eob = value.eob #shdf_dic
+                            thtd_dic[key].eob = value.eob
                             temp_dic[value.eob] = value
 
                             main_window.history_today_all_dic[value.symbol] = temp_dic
 
-
                        else:
                             #这里遍历出每一个标的代码对应的此刻时段之前的所有历史数据，数据类型是 一个key对应一个dic
-
-                            #当日历史数据不需要分割时间, 测试没有问题后，再删除注释掉的代码
-                            # temp_today_history_time_arr = value.eob.split(" ")
-                            # temp_h_hour_arr = temp_today_history_time_arr[1].split("+")
-
-                            # thtd_dic[key].eob = temp_h_hour_arr[0] #shdf_dic
-                            # main_window.history_today_all_dic[value.symbol][temp_h_hour_arr[0]] = value
-
                             thtd_dic[key].eob = value.eob #shdf_dic
                             main_window.history_today_all_dic[value.symbol][value.eob] = value
 
@@ -1847,8 +1881,6 @@ class ReciveQThread(QThread):
                     #牛逼，真出问题了，搬这里来试试!!
                     main_window.is_init_window = True
                     main_window.has_init_window_single.emit(main_window.is_init_window)
-
-                    # main_window.teat_thread_1()
 
 
     #解析标的时间
