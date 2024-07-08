@@ -99,6 +99,7 @@ def init(context):
     context.init_complete_client = {}
     context.ids = {}
     context.ids_info_dict = {} # 记录一些tick中的标的数据，方便在其他地方的时候可以使用，数据格式为：key：标的字符串  value：是TargetInfo类型
+    context.client_order = {} # 记录正在进行中的订单，防止重复买入和卖出
     context.is_subscribe = False
     context.iniclient_socket_lock = threading.Lock()
 
