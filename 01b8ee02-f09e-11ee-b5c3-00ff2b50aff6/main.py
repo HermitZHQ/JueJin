@@ -65,6 +65,44 @@ class TargetInfo:
         self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
         self.pre_quick_buy_amount = 0 # 准备急速买入的额度
 
+class BuyMode:
+    def __init__(self):
+        # 注意每个策略下面只能设定一种对应的买入模式（也就是只有一种可以激活到1）！！
+        self.buy_all = 0 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
+        self.buy_one = 1 # 买一只，并指定对应的价格
+        self.buy_all_force = 0 # 一定要保证买入所有（对应数量非常大的买入，且有很多高价股，均分值无法覆盖高价股）
+
+class OrderTypeBuy:
+    def __init__(self):
+        # 选择整体的订单交易模式，限价或者市价，只能激活一种！！
+        self.Limit = 0
+        self.Market = 1
+
+class OrderTypeSell:
+    def __init__(self):
+        # 选择整体的订单交易模式，限价或者市价，只能激活一种！！
+        self.Limit = 0
+        self.Market = 1
+
+class StrategyInfo:
+    def __init__(self):
+        # 指定策略对应的模式，策略A就对应A=1，一次只能激活一种策略！！
+        self.A = 0
+        self.AC = 0
+        self.A1 = 0
+        self.AA = 0
+        self.B = 1
+        self.B1 = 0
+        self.BA = 0
+        self.C = 0
+        self.M = 0
+
+        self.buy_mode = BuyMode()
+        self.order_type_buy = OrderTypeBuy()
+        self.order_type_sell = OrderTypeSell()
+
+        self.slip_step = 3 # 滑点级别，1-5，要突破5的话，可以自己算？
+
 # 策略中必须有init方法
 def init(context):
     context.LENGTH_FORMAT = 'I'
@@ -102,7 +140,8 @@ def init(context):
     context.ids_info_dict = {} # 记录一些tick中的标的数据，方便在其他地方的时候可以使用，数据格式为：key：标的字符串  value：是TargetInfo类型
     context.client_order = {} # 记录正在进行中的订单，防止重复买入和卖出
     context.pre_quick_buy_dict = {} # 在socket收到消息后，不要马上买入，因为价格并不准确，需要在tick激活时买入
-    context.pre_quick_sell_dict = {} # 同上，用于卖出
+    context.pre_quick_sell_dict = {} # 同上，用于卖出    
+    context.strategy_info = StrategyInfo() # 保存策略信息以及买入方式到全局变量中
     context.is_subscribe = False
     context.iniclient_socket_lock = threading.Lock()
 
@@ -632,7 +671,7 @@ def init_client_fragments(context):
                 print(f"ReciveClientThreadC----总耗时为02:{time.time()-t:4f}s")
                 if_complete = 1
 
-def handle_pre_order(context, tick):
+def handle_pre_quick_order(context, tick):
     
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
@@ -641,11 +680,31 @@ def handle_pre_order(context, tick):
     
     # 检测处理标的是否存在于队列中
     if tick.symbol in context.pre_quick_buy_dict.keys():
-        print(f"准备开始处理急速购买标的[{tick.symbol}]-[{context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / 10000}]w")
+        
+        # 最新价格，目前使用的最新价格，我们直接用买（卖）5的价格
+        # 也就是我们目前使用滑点5的设置
+        # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
+        curVal = tick.price
+        curVal1_5 = [tick.quotes[0]['ask_p'], tick.quotes[1]['ask_p'], tick.quotes[2]['ask_p'], tick.quotes[3]['ask_p'], tick.quotes[4]['ask_p']] #卖1-5价格
+        # 这里需要对值进行检测，有时候买卖5是空的，需要选择一个有效值
+        curVal5 = 0
+        for idx in range(0, context.strategy_info.slip_step):
+            if (curVal1_5[context.strategy_info.slip_step - 1 - idx] != 0):
+                curVal5 = curVal1_5[context.strategy_info.slip_step - 1 - idx]
+                break
+
+        if (curVal5 == 0) and (context.strategy_info.order_type_buy.Market == 0):
+            log(f"[{tick.symbol}][try buy]--this should not happen, all values are 0, return for tmp")
+            return
+
+        # 使用市价的话，不再使用滑点价格，而是使用涨停价格（跟卷商人员确认过）
+        if (context.strategy_info.order_type_buy.Market == 1) and (tick.symbol in context.ids_info_dict.keys()):
+            curVal5 = context.ids_info_dict[tick.symbol].upper_limit
+        
         base_num = 1
         # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
         # TODO:科创至少200
-        buy_in_num = math.floor(context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / (tick.price * 1.002)) # 预留0.2%的手续费，先观察是否合理
+        buy_in_num = math.floor(context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / (curVal5 * 1.002)) # 预留0.2%的手续费，先观察是否合理
         base_num = math.floor(buy_in_num / 100)
         
         # 科创股至少买200，检查如果是100的话，能买的起200就买
@@ -654,8 +713,9 @@ def handle_pre_order(context, tick):
             base_num = 2
         
         # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求）
-        log(f"------try buy with symbol[{tick.symbol}]--[{base_num * 100}]")
-        list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
+        # 发现了有些标的存在不能直接指定市价不指定价格，无法买入，报错返回有市价保护，那我们还是把price带上，Market的话则使用涨停价格
+        log(f"开始尝试急速购买标的[{tick.symbol}]-[{context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / 10000}]万元，股数[{base_num * 100}]，买入价格[{round(curVal5, 2)}]，是否市价[{(context.strategy_info.order_type_buy.Market == 1)}]")
+        list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open, price=curVal5)
         
         # 记录order的client id，避免出现之前的重复购买
         # 只有当id在order status的回掉中，出现已成（不是部成）或者被拒绝的时候，才开放再次购买
@@ -670,7 +730,8 @@ def handle_pre_order(context, tick):
             sell_num = context.ids_info_dict[tick.symbol].hold_available
         
         # 直接使用市价卖出，则可以不指定卖出价格（居然根据佳哥需求）
-        log(f"------try sell with symbol[{tick.symbol}]--[{sell_num}]")
+        # [TODO]需要观察是否卖出也存在不能不指定价格的情况，目前暂时好像没有，有的话，也需要改为指定跌停价卖出！
+        log(f"开始尝试急速卖出标的（市价-不指定price）[{tick.symbol}]--[{sell_num}]")
         list_order = order_volume(symbol=tick.symbol, volume=sell_num, side=OrderSide_Sell, order_type=OrderType_Market, position_effect=PositionEffect_Close)
         
         # 记录order的client id，避免出现之前的重复购买
@@ -694,6 +755,7 @@ def on_tick(context, tick):
                 print(f"[init][{tick.symbol}]get cache info null, this should not happen[可能是停牌]......")
             else:
                 context.ids_info_dict[tick.symbol].name = info.sec_name[0]
+                context.ids_info_dict[tick.symbol].upper_limit = info.upper_limit[0]
         
         # 持仓不要一直获取，下面拿pos的函数延迟很大，需要特别注意！！！
         if context.ids_info_dict[tick.symbol].hold_available == 0:
@@ -709,7 +771,7 @@ def on_tick(context, tick):
                 # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
                 
     # 处理待买入或者卖出的列表--------------------------------------------------
-    handle_pre_order(context, tick)
+    handle_pre_quick_order(context, tick)
 
     #客户端断开连接后，从socket_dic中移除相应sokcet
     if len(context.delete_temp_adress_arr) > 0:
