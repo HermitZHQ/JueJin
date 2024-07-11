@@ -22,6 +22,8 @@ OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
 
+load_history_path = 'c:\\TradeLogs\\' + 'AllHistoryInfo' + '.npy'
+
 class AnalysisHistoryData():
     def __init__(self, symbol, amount, eob, name):
         self.symbol = symbol
@@ -119,6 +121,8 @@ class TestClientUI(QMainWindow):
         self.is_in_updating = False
         self.is_complate_all_init = False
         self.is_init_window = False
+        self.is_w2_refresh = True #控制每分钟数据是否显示
+        self.is_w6_refresh = True #控制当日所有数据是否显示
 
         self.test_index = 0
 
@@ -137,13 +141,19 @@ class TestClientUI(QMainWindow):
         self.has_today_history_update_single.connect(self.init_today_history_for_single)
         self.has_init_window_single.connect(self.init_window)
 
+        # self.load_history_info()
+
         self.connect_server()
 
-        # mac_address = self.get_mac_info()
-        # # 使用upper()方法转换为大写  
-        # mac_address_uppercase = mac_address.upper()  
-        # print(f"{mac_address_uppercase}")
 
+    def load_history_info(self):
+        print(f"load_history_path:{load_history_path}")
+        temp_history_dic = np.load(load_history_path, allow_pickle=True)
+        temp_history_dic = dict(temp_history_dic.tolist())
+        print(f"temp_history_dic length:{len(temp_history_dic)}")
+
+        # for value in temp_history_dic.values():
+        #     print(f"{value['symbol']}:{value['amount']}:{value['eob']}")
 
     def connect_server(self):
         #"8.137.48.212" - 127.0.0.1 # 线程Server 正式服12345, 调试服12346
@@ -280,20 +290,6 @@ class TestClientUI(QMainWindow):
         self.input_box_search = QLineEdit(self)
         self.input_box_search.returnPressed.connect(lambda: self.w1_select_stock(self.input_box_search))
         self.w1.top_function_widget_layout.addWidget(self.input_box_search)
-        
-        # 添加按钮支持急速买入
-        btn_quick_buy = QPushButton(self)
-        btn_quick_buy.setText("买入")
-        btn_quick_buy.setFixedSize(QSize(60, 30))
-        btn_quick_buy.pressed.connect(lambda: self.w1_quick_buy())
-        self.w1.top_function_widget_layout.addWidget(btn_quick_buy)
-        
-        # 添加按钮支持急速卖出
-        btn_quick_sell = QPushButton(self)
-        btn_quick_sell.setText("卖出")
-        btn_quick_sell.setFixedSize(QSize(60, 30))
-        btn_quick_sell.pressed.connect(lambda: self.w1_quick_sell())
-        self.w1.top_function_widget_layout.addWidget(btn_quick_sell)
 
         #1分钟实时数据
         self.w2 = InitChildQwidGet()
@@ -305,6 +301,20 @@ class TestClientUI(QMainWindow):
         self.w2.up_contnet_widget_layout.addWidget(btn)
         content_label = QLabel(f'1分钟实时数据(9:25--15:30)', self.w2.up_contnet_widget)
         self.w2.up_contnet_widget_layout.addWidget(content_label)
+
+        #____添加w2按钮支持急速买入
+        btn_quick_buy = QPushButton(self)
+        btn_quick_buy.setText("买入")
+        btn_quick_buy.setFixedSize(QSize(60, 30))
+        btn_quick_buy.pressed.connect(lambda: self.w1_quick_buy())
+        self.w2.top_function_widget_layout.addWidget(btn_quick_buy)
+        
+        #____添加w2按钮支持急速卖出
+        btn_quick_sell = QPushButton(self)
+        btn_quick_sell.setText("卖出")
+        btn_quick_sell.setFixedSize(QSize(60, 30))
+        btn_quick_sell.pressed.connect(lambda: self.w1_quick_sell())
+        self.w2.top_function_widget_layout.addWidget(btn_quick_sell)
 
         #1分钟达到预设次数
         self.w3 = InitChildQwidGet()
@@ -845,20 +855,19 @@ class TestClientUI(QMainWindow):
         temp_w2_last_time = ''
 
         #这里not in用于刚打开客户端，第一次当前label的添加
-        if symbol not in self.w2.stock_current_label_dic.keys():
+        if self.is_w2_refresh == True and symbol not in self.w2.stock_current_label_dic.keys():
 
             data_label = self.create_current_label(cur_date.eob, his_d_a, cur_d_a, calculate_percent, self.w2.stock_widget_dic[symbol].widget)
 
             self.w2.stock_widget_dic[symbol].layout.addWidget(data_label)
             self.w2.label_with_time_dic[symbol].append(data_label)
-            
 
             temp_current_label_info = CurrentLabelInfo(data_label, cur_date.eob, cur_d_a, his_d_a)
             self.w2.stock_current_label_dic[symbol] = temp_current_label_info
             self.w2.stock_time_labelinfo_dic[symbol][cur_date.eob] = temp_current_label_info
 
         #更新当前分钟数的label
-        elif self.w2.stock_current_label_dic[symbol].current_time != cur_date.eob:
+        elif self.is_w2_refresh == True and self.w2.stock_current_label_dic[symbol].current_time != cur_date.eob:
 
             #这里需要补全灵活分钟label,例如40分到41分，有些票来数据，就会添加灵活分钟当前label
             #有些票如果这一分钟没来数据，到下一分钟41分后来，就会创建41-46(例灵活时间为5分钟)
@@ -892,7 +901,8 @@ class TestClientUI(QMainWindow):
             self.w2.stock_time_labelinfo_dic[symbol][cur_date.eob] = CurrentLabelInfo(data_label, cur_date.eob, cur_d_a, his_d_a)
 
         #实时更新当前label中的amount
-        else:
+        #else -- elif
+        elif self.is_w2_refresh == True:
             #当前成交额与上一此成交相加，得到当前总共成交额
             # temp_current_amount = round(float(self.w2.stock_current_label_dic[symbol].amount + cur_d_a), 2)
             temp_current_amount = round(float(self.w2.stock_time_labelinfo_dic[symbol][cur_date.eob].amount + cur_d_a), 2)
@@ -905,18 +915,19 @@ class TestClientUI(QMainWindow):
             # self.w2.stock_current_label_dic[symbol].label.setText(f'{cur_date.eob}\n{his_d_a}\n{temp_current_amount}\n{calculate_percent}%')
             self.w2.stock_time_labelinfo_dic[symbol][cur_date.eob].label.setText(f'{cur_date.eob}\n{his_d_a}\n{temp_current_amount}\n{calculate_percent}%')
 
-        #根据百分比设置label颜色
-        if calculate_percent == 'N':
-            self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: grey; }')
-        elif calculate_percent > 0:
-            self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: red; }')  
-        elif calculate_percent < 0:
-            self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: green; }')  
-        #根据历史数据设置label颜色,这里要先转化为float再转化为int
-        if int(float(his_date.amount)) == 0:
-            self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: blue; }')
-        if self.w2.stock_current_label_dic[symbol].amount == 0:
-            self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: grey; }')
+        if self.is_w2_refresh == True:
+            #根据百分比设置label颜色
+            if calculate_percent == 'N':
+                self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: grey; }')
+            elif calculate_percent > 0:
+                self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: red; }')  
+            elif calculate_percent < 0:
+                self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: green; }')  
+            #根据历史数据设置label颜色,这里要先转化为float再转化为int
+            if int(float(his_date.amount)) == 0:
+                self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: blue; }')
+            if self.w2.stock_current_label_dic[symbol].amount == 0:
+                self.w2.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: grey; }')
 
         
         #对灵活分钟数相关计算 ===============================================
@@ -1190,15 +1201,16 @@ class TestClientUI(QMainWindow):
                 self.w4.stock_current_label_dic[symbol].label.setStyleSheet('QLabel { color: grey; }')
 
 
-        #当日所有成交额刷新
-        temp_all_day_current_amount = round(float(self.w6.stock_current_label_dic[symbol].amount + cur_d_a), 2)
+        if self.is_w6_refresh == True:
+            #当日所有成交额刷新
+            temp_all_day_current_amount = round(float(self.w6.stock_current_label_dic[symbol].amount + cur_d_a), 2)
 
-        #重新赋值，以便再次计算
-        self.w6.stock_current_label_dic[symbol].amount = temp_all_day_current_amount
+            #重新赋值，以便再次计算
+            self.w6.stock_current_label_dic[symbol].amount = temp_all_day_current_amount
 
-        temp_all_day_calculate_percent = self.calculate_percent_mathod(self.w6.stock_current_label_dic[symbol].history_amount, temp_all_day_current_amount)
+            temp_all_day_calculate_percent = self.calculate_percent_mathod(self.w6.stock_current_label_dic[symbol].history_amount, temp_all_day_current_amount)
 
-        self.w6.stock_current_label_dic[symbol].label.setText(f'ALL DAY\n{round(float(self.w6.stock_current_label_dic[symbol].history_amount), 2)}\n{temp_all_day_current_amount}\n{temp_all_day_calculate_percent}%')
+            self.w6.stock_current_label_dic[symbol].label.setText(f'ALL DAY\n{round(float(self.w6.stock_current_label_dic[symbol].history_amount), 2)}\n{temp_all_day_current_amount}\n{temp_all_day_calculate_percent}%')
 
         print(f"{cur_date.symbol}: update label success")
 
@@ -1470,8 +1482,9 @@ class ScrollableLabels(QWidget):
         else:
             print(f"N")
         
-
-        print(f"{cur_d.symbol}: update label success")
+        #调试时，可以注释掉这里，方便查看问题!
+        if int(float(cur_d.amount)) != 0:
+            print(f"{cur_d.symbol}: update label success")
 
     def flicker_background(self):
             if self.scroll_area.styleSheet() == "QWidget { background-color: white; }":  
@@ -1591,6 +1604,8 @@ class ReciveQThread(QThread):
                     name_count = int.from_bytes(name_count_bytes, byteorder='big')
 
                     #这里报错，暂时不太清，将这里改成字符串接收
+                    #symbol_and_name_recive.decode('utf-8'),这里改为utf-8后暂时没发现报错，但还需要观察!!
+                    name_index = 0
                     for i in range(name_count):
                         # symbol_letter_bytes = self.client_socket.recv(4)
                         # symbol_num_bytes = self.client_socket.recv(4)
@@ -1611,7 +1626,8 @@ class ReciveQThread(QThread):
                         symbol_and_name = symbol_and_name_recive.decode('utf-8')
                         symbol_name_arr = symbol_and_name.split("+")
 
-                        print(f"{symbol_name_arr[0]}:{symbol_name_arr[1]}")
+                        name_index += 1
+                        print(f"{symbol_name_arr[0]}:{symbol_name_arr[1]}|{name_index}")
 
                         main_window.name_dic[symbol_name_arr[0]] = symbol_name_arr[1]
 
@@ -1667,7 +1683,9 @@ class ReciveQThread(QThread):
                             eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
 
                             # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
-                            temp_history_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
+
+                            if symbol in main_window.name_dic.keys():
+                                temp_history_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
 
                         had_recive_count += history_recive_count
                         if had_recive_count == history_data_count:
@@ -1776,7 +1794,10 @@ class ReciveQThread(QThread):
                         for item in main_window.temp_wait_for_update_list:
                             temp_item = item
                             main_window.wait_for_update_list.append(temp_item)    
-                            print(f"put in update list::{temp_item.symbol}||{temp_item.amount}||{temp_item.eob}")
+
+                            #str转换int,需要先将其转化为float,再转化为int
+                            if int(float(temp_item.amount)) != 0:
+                                print(f"put in update list::{temp_item.symbol}||{temp_item.amount}||{temp_item.eob}")
 
                         #清空临时list,准备接新的数据
                         main_window.temp_wait_for_update_list.clear()
