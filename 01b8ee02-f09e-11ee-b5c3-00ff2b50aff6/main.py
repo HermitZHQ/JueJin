@@ -102,7 +102,7 @@ class StrategyInfo:
         self.order_type_buy = OrderTypeBuy()
         self.order_type_sell = OrderTypeSell()
 
-        self.slip_step = 3 # 滑点级别，1-5，要突破5的话，可以自己算？
+        self.slip_step = 5 # 滑点级别，1-5，要突破5的话，可以自己算？
 
 # 策略中必须有init方法
 def init(context):
@@ -145,6 +145,17 @@ def init(context):
     context.pre_quick_buy_dict = {} # 在socket收到消息后，不要马上买入，因为价格并不准确，需要在tick激活时买入
     context.pre_quick_sell_dict = {} # 同上，用于卖出    
     context.strategy_info = StrategyInfo() # 保存策略信息以及买入方式到全局变量中
+    
+    if context.strategy_info.order_type_buy.Limit == 1:
+        context.order_type_buy = OrderType_Limit
+    elif context.strategy_info.order_type_buy.Market == 1:
+        context.order_type_buy = OrderType_Market
+
+    if context.strategy_info.order_type_sell.Limit == 1:
+        context.order_type_sell = OrderType_Limit
+    elif context.strategy_info.order_type_sell.Market == 1:
+        context.order_type_sell = OrderType_Market
+    
     context.is_subscribe = False
     context.is_can_show_print = False
     context.iniclient_socket_lock = threading.Lock()
@@ -555,8 +566,14 @@ def handle_pre_quick_order(context, tick):
             return
 
         # 使用市价的话，不再使用滑点价格，而是使用涨停价格（跟卷商人员确认过）
+        # 买入市价保护价范围是当前价到涨停价（跟陈老师确认过）
+        # 填涨停价会冻结较多资金，满仓时资金可能会不够，可以填卖五价，确保尽快成交吧（跟陈老师确认过）
+        # 那其实意思就是即便是市价，还是建议用买5的价格计算数量，以及填入最终的保护价
+        upper_limit = curVal5
         if (context.strategy_info.order_type_buy.Market == 1) and (tick.symbol in context.ids_info_dict.keys()):
-            curVal5 = context.ids_info_dict[tick.symbol].upper_limit
+            # [奇点！]本来为了保证市价一定买入的话，应该填入的买入价格是涨停价，也确实可以这么填，但是这么填的话，有个问题，就是会少买很多股数进来。。。
+            # 所以最后，在市价的情况下，我们作为妥协，还是选择买5的价格来操作，这样不会剩下太多余额
+            upper_limit = context.ids_info_dict[tick.symbol].upper_limit
         
         base_num = 1
         # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
@@ -569,10 +586,15 @@ def handle_pre_quick_order(context, tick):
         if tech_flag and base_num == 1:
             base_num = 2
         
-        # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求）
+        # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求），这个后面跟陈老师确认了，沪市和科创板还是必须要填入保护价（不填的话就会买入失败）
         # 发现了有些标的存在不能直接指定市价不指定价格，无法买入，报错返回有市价保护，那我们还是把price带上，Market的话则使用涨停价格
         log(f"开始尝试急速购买标的[{tick.symbol}]-[{context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / 10000}]万元，股数[{base_num * 100}]，买入价格[{round(curVal5, 2)}]，是否市价[{(context.strategy_info.order_type_buy.Market == 1)}]")
-        list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open, price=curVal5)
+        
+        if context.strategy_info.order_type_buy.Limit == 1:
+            list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
+        elif context.strategy_info.order_type_buy.Market == 1:
+            # 目前上下看起来一样，但是逻辑上是不同的，只是因为暂时我们没有使用涨停价的原因（会导致买不完余额）
+            list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
         
         # 记录order的client id，避免出现之前的重复购买
         # 只有当id在order status的回掉中，出现已成（不是部成）或者被拒绝的时候，才开放再次购买
