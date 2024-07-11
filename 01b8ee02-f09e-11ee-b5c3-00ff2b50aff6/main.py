@@ -300,7 +300,7 @@ def subscribe_method(context):
     print(f"ids count:{len(info)}")
     
 
-#初始化客户端，一次性传输数据，
+#初始化客户端，一次性传输数据
 def init_client_one_time(context):
 
     if context.is_subscribe == False:
@@ -539,6 +539,9 @@ def init_client_one_time(context):
             # simulation_on_bar(context)
 
 
+#由于tick中内容代码过多，尝试将各部分代码进行封装!!!
+
+#__tick__
 def handle_pre_quick_order(context, tick):
     
     # 如果client order还没有处理完，也返回
@@ -619,8 +622,39 @@ def handle_pre_quick_order(context, tick):
         # 数据信息：{symbol:[list_order]}，直接把list_order一下装进去吧，也不用费事单独拆一些数据了
         context.client_order[tick.symbol] = list_order
 
-def on_tick(context, tick):
 
+#__tick__客户端断开连接后，从dic中删除断开连接的socket
+def delete_socket(context):
+    #客户端断开连接后，从socket_dic中移除相应sokcet
+    if len(context.delete_temp_adress_arr) > 0:
+
+        for key in context.delete_temp_adress_arr:
+            del context.client_init_complete_dic[context.socket_dic[key]]
+            del context.socket_dic[key]
+
+        context.delete_temp_adress_arr = []
+
+#__tick__对连接进来的客户端进行初始化
+def init_client_method(context):
+    if context.init_client_socket_dic:
+
+        context.iniclient_socket_lock.acquire()
+
+        for key, valume in context.init_client_socket_dic.items():
+
+            if valume.is_init == False and valume.is_initing == False and valume.check_mac_flag == True:
+                init_client_one_time(context)
+        # 在这里检测是否需要删除，需要的话，从这儿删除
+        if len(context.delete_client_socket_arr) > 0:
+            for key in context.delete_client_socket_arr:
+                del context.init_client_socket_dic[key]
+            # 重置数组为空（删除后）
+            context.delete_client_socket_arr = []
+
+        context.iniclient_socket_lock.release()
+
+#__tick__更新对应标的对应保存信息
+def update_ids_info_method(context, tick):
     # 更新对应标的的一些保存信息----------------------------------------
     if tick.symbol in context.ids_info_dict.keys():
         context.ids_info_dict[tick.symbol].price = tick.price
@@ -646,115 +680,164 @@ def on_tick(context, tick):
             else:
                 context.ids_info_dict[tick.symbol].hold_available = pos.available_now
                 # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
+
+#__tick__向正在初始化的客户端，发送
+def send_data_in_first(context, v):
+    #这里先发获得历史中的当前分钟内的数据
+    if len(context.ready_second_for_send) > 0:
+        print(f"context.ready_second_for_send::{len(context.ready_second_for_send)}")
+        for second_data in context.ready_second_for_send:
+            context.cur_data_dic.clear()
+            context.cur_data_dic[second_data['symbol']] = second_data
+            print(f"context.ready_second_for_send::{second_data['symbol']}::{second_data['amount']}::{second_data['eob']}")
+            send_message_second_method(v, context)
+        #不能再这里做清空，下面需要对比是否有重复数据
+        # context.ready_second_for_send.clear()
+
+    #这里在初始化完成后，第一次发送数据，这里可能会有点问题！！！
+    if len(context.ready_for_send) > 0:
+        print(f"context.ready_for_send::{len(context.ready_for_send)}")
+        for ready_data in context.ready_for_send:
+            context.cur_data_dic.clear()
+            context.cur_data_dic[ready_data['symbol']] = ready_data
+            # print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
+            
+            #这里需要遍历ready_second_for_send,查看是否有重复数据
+            for second_data in context.ready_second_for_send:
+                if ready_data['symbol'] == second_data['symbol']:
+                    if ready_data['eob'] != second_data['eob']:
+                        send_message_second_method(v, context)
+                    #这里将break tab了一下，不知道会不会有啥问题，看看先    
+                    break
+
+    if len(context.ready_for_send) > 0:
+        context.ready_for_send.clear()
+    if len(context.ready_second_for_send) > 0:
+        context.ready_second_for_send.clear()
+    
+#__tick__当客户端还在初始化时，存储tick来的新数据
+def storage_data_when_client_init(context):
+    for data_key, data_value in context.cur_data_dic.items():
+        temp_ready_for_send_data = data_value
+
+        temp_index = 0
+
+        #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
+        for find_symbol_data in context.ready_for_send:
+
+            temp_index += 1
+
+            if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
+                #获得当前数据的当前分钟
+                temp_cur_data_time = temp_ready_for_send_data['eob']
+
+                get_A_time_arr = temp_cur_data_time.split("+")
+                get_A_time_arr_1 = get_A_time_arr[0].split(" ")
+                get_A_time_arr_2 = get_A_time_arr_1[1].split(":")
+
+                get_A_min = get_A_time_arr_2[1]
+
+                #获得在集合中数据的当前分钟
+                temp_in_list_data_time = find_symbol_data['eob']
+
+                get_B_time_arr = temp_in_list_data_time.split("+")
+                get_B_time_arr_1 = get_B_time_arr[0].split(" ")
+                get_B_time_arr_2 = get_B_time_arr_1[1].split(":")
+
+                get_B_min = get_B_time_arr_2[1]
+
+                if get_A_min == get_B_min:
+
+                    temp_delete_amount = find_symbol_data['amount']
+                    temp_now_amount = temp_ready_for_send_data['amount']
+                    #当前分钟内同一只标的，数据相加
+                    temp_adding_amount = round(float(temp_delete_amount), 2) + round(float(temp_now_amount), 2)
+
+                    #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
+                    find_symbol_data['amount'] = str(temp_adding_amount)
+                    find_symbol_data['eob'] = temp_ready_for_send_data['eob']
+
+                    break
+
+        if temp_index == len(context.ready_for_send):
+            context.ready_for_send.append(temp_ready_for_send_data)    
+
+    print(f"ready_for_send length:{len(context.ready_for_send)}")
+
+#__tick__测试1分钟所掉数据相关代码代码，暂时没使用
+def test_1min_lose_data(context, tick):
+    #这段用于测试1分钟内，掉的数据,离开了当前分钟就不想客户端发送数据,暂时不用了!!!
+    if context.socket_dic:
+        for k,v in context.socket_dic.items():
+            if context.client_init_complete_dic[v] == False:
+                temp_current_time_arr = str(tick['created_at']).split(" ")
+                temp_c_hour_arr = temp_current_time_arr[1].split("+")
+                temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
+                temp_h_m_s = temp_int_c_hour_arr[0].split(":")
+
+                now_time_h = temp_h_m_s[0]
+                now_time_m = temp_h_m_s[1]
+                now_time_s = temp_h_m_s[2]
+
+                context.test_second_data_time = now_time_m
+
+            else:
+                temp_current_time_arr = str(tick['created_at']).split(" ")
+                temp_c_hour_arr = temp_current_time_arr[1].split("+")
+                temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
+                temp_h_m_s = temp_int_c_hour_arr[0].split(":")
+
+                now_time_h = temp_h_m_s[0]
+                now_time_m = temp_h_m_s[1]
+                now_time_s = temp_h_m_s[2]
+
+                context.test_next_second_data_time = now_time_m
+
+    # 上面那段是在这个 if context.socket_dic: 上面
+    # 下面那段是在这个 if context.socket_dic: 下面, 在send_data_in_first(context)这个后面
+
+    # 用于测试1分钟内，tick掉的数据，暂时不用了
+    if context.test_second_data_time == context.test_next_second_data_time:
+        context.cur_data_dic.clear()
+        context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
+        print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
+        send_message_second_method(v, context)
+
+
+
+def on_tick(context, tick):
+
+    # 更新对应标的的一些保存信息------------------------------------------------
+    update_ids_info_method(context, tick)
                 
     # 处理待买入或者卖出的列表--------------------------------------------------
     handle_pre_quick_order(context, tick)
 
-    #客户端断开连接后，从socket_dic中移除相应sokcet
-    if len(context.delete_temp_adress_arr) > 0:
+    # 客户端断开连接后，从socket_dic中移除相应sokcet-----------------------------
+    delete_socket(context)
 
-        for key in context.delete_temp_adress_arr:
-            del context.client_init_complete_dic[context.socket_dic[key]]
-            del context.socket_dic[key]
+    # 初始化连入的客户端--------------------------------------------------------
+    init_client_method(context)
 
-        context.delete_temp_adress_arr = []
-
-    if context.init_client_socket_dic:
-
-        context.iniclient_socket_lock.acquire()
-
-        for key, valume in context.init_client_socket_dic.items():
-
-            if valume.is_init == False and valume.is_initing == False and valume.check_mac_flag == True:
-                init_client_one_time(context)
-        # 在这里检测是否需要删除，需要的话，从这儿删除
-        if len(context.delete_client_socket_arr) > 0:
-            for key in context.delete_client_socket_arr:
-                del context.init_client_socket_dic[key]
-            # 重置数组为空（删除后）
-            context.delete_client_socket_arr = []
-
-        context.iniclient_socket_lock.release()
-
-    #=-===============================================================
+    # 实时数据刷新刷新部分------------------------------------------------------
     if context.is_subscribe == True:
 
         if tick['symbol'] != 'SHSE.000001' :
             
+            #这里重复放一个这个是有点原因的，但是暂时想不起来了，后面可以来想想再改
             context.cur_data_dic.clear()
             context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
-
-            #这段用于测试1分钟内，掉的数据,离开了当前分钟就不想客户端发送数据,暂时不用了!!!
-            # if context.socket_dic:
-            #     for k,v in context.socket_dic.items():
-            #         if context.client_init_complete_dic[v] == False:
-            #             temp_current_time_arr = str(tick['created_at']).split(" ")
-            #             temp_c_hour_arr = temp_current_time_arr[1].split("+")
-            #             temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
-            #             temp_h_m_s = temp_int_c_hour_arr[0].split(":")
-
-            #             now_time_h = temp_h_m_s[0]
-            #             now_time_m = temp_h_m_s[1]
-            #             now_time_s = temp_h_m_s[2]
-
-            #             context.test_second_data_time = now_time_m
-
-            #         else:
-            #             temp_current_time_arr = str(tick['created_at']).split(" ")
-            #             temp_c_hour_arr = temp_current_time_arr[1].split("+")
-            #             temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
-            #             temp_h_m_s = temp_int_c_hour_arr[0].split(":")
-
-            #             now_time_h = temp_h_m_s[0]
-            #             now_time_m = temp_h_m_s[1]
-            #             now_time_s = temp_h_m_s[2]
-
-            #             context.test_next_second_data_time = now_time_m
             
             if context.socket_dic:
+
                 for k,v in context.socket_dic.items():
 
                     if context.client_init_complete_dic[v] == True:
 
-                        #这里先发获得历史中的当前分钟内的数据
-                        if len(context.ready_second_for_send) > 0:
-                            print(f"context.ready_second_for_send::{len(context.ready_second_for_send)}")
-                            for second_data in context.ready_second_for_send:
-                                context.cur_data_dic.clear()
-                                context.cur_data_dic[second_data['symbol']] = second_data
-                                print(f"context.ready_second_for_send::{second_data['symbol']}::{second_data['amount']}::{second_data['eob']}")
-                                send_message_second_method(v, context)
-                            #不能再这里做清空，下面需要对比是否有重复数据
-                            # context.ready_second_for_send.clear()
+                        #当客户端初始化完成后，向客户端发送第一次数据
+                        send_data_in_first(context, v)
 
-                        #这里在初始化完成后，第一次发送数据，这里可能会有点问题！！！
-                        if len(context.ready_for_send) > 0:
-                            print(f"context.ready_for_send::{len(context.ready_for_send)}")
-                            for ready_data in context.ready_for_send:
-                                context.cur_data_dic.clear()
-                                context.cur_data_dic[ready_data['symbol']] = ready_data
-                                # print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
-                                
-                                #这里需要遍历ready_second_for_send,查看是否有重复数据
-                                for second_data in context.ready_second_for_send:
-                                    if ready_data['symbol'] == second_data['symbol']:
-                                        if ready_data['eob'] != second_data['eob']:
-                                            send_message_second_method(v, context)
-                                        #这里将break tab了一下，不知道会不会有啥问题，看看先    
-                                        break
-
-                        if len(context.ready_for_send) > 0:
-                            context.ready_for_send.clear()
-                        if len(context.ready_second_for_send) > 0:
-                            context.ready_second_for_send.clear()
-
-                        #用于测试1分钟内，tick掉的数据，暂时不用了
-                        # if context.test_second_data_time == context.test_next_second_data_time:
-                        #     context.cur_data_dic.clear()
-                        #     context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
-                        #     print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
-                        #     send_message_second_method(v, context)
-
+                        #由于在tick里，server与client的传输结构模式，这里需要补发一次当前tick来的数据
                         context.cur_data_dic.clear() 
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
                         send_message_second_method(v, context)
@@ -763,53 +846,10 @@ def on_tick(context, tick):
                     else:
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
                         #这里有点问题，可能会有重复数据出现，后面记得来改!!!
-                        for data_key, data_value in context.cur_data_dic.items():
-                            temp_ready_for_send_data = data_value
-
-                            temp_index = 0
-
-                            #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
-                            for find_symbol_data in context.ready_for_send:
-
-                                temp_index += 1
-
-                                if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
-                                    #获得当前数据的当前分钟
-                                    temp_cur_data_time = temp_ready_for_send_data['eob']
-
-                                    get_A_time_arr = temp_cur_data_time.split("+")
-                                    get_A_time_arr_1 = get_A_time_arr[0].split(" ")
-                                    get_A_time_arr_2 = get_A_time_arr_1[1].split(":")
-
-                                    get_A_min = get_A_time_arr_2[1]
-
-                                    #获得在集合中数据的当前分钟
-                                    temp_in_list_data_time = find_symbol_data['eob']
-
-                                    get_B_time_arr = temp_in_list_data_time.split("+")
-                                    get_B_time_arr_1 = get_B_time_arr[0].split(" ")
-                                    get_B_time_arr_2 = get_B_time_arr_1[1].split(":")
-
-                                    get_B_min = get_B_time_arr_2[1]
-
-                                    if get_A_min == get_B_min:
-
-                                        temp_delete_amount = find_symbol_data['amount']
-                                        temp_now_amount = temp_ready_for_send_data['amount']
-                                        #当前分钟内同一只标的，数据相加
-                                        temp_adding_amount = round(float(temp_delete_amount), 2) + round(float(temp_now_amount), 2)
-
-                                        #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
-                                        find_symbol_data['amount'] = str(temp_adding_amount)
-                                        find_symbol_data['eob'] = temp_ready_for_send_data['eob']
-
-                                        break
-
-                            if temp_index == len(context.ready_for_send):
-                                context.ready_for_send.append(temp_ready_for_send_data)    
-
-                        print(f"ready_for_send length:{len(context.ready_for_send)}")
+                        storage_data_when_client_init(context)
                         
+
+#on_bar未使用，暂时保留
 def on_bar(context, bars):
 
     print(f"bars length:{len(bars)}")
