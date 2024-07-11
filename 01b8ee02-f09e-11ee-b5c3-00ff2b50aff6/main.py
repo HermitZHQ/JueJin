@@ -14,9 +14,11 @@ import re
 import pickle
 import subprocess
 import math
+import sys 
 
 global_i = 0
 str_strategy = 'VDebug'
+str_load_history = 'AllHistoryInfo'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path_a1 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A1.txt'
 ids_path_a2 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A2.txt'
@@ -25,10 +27,21 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-section_history_stock_count = 3
+SECTION_HISTORY_STOCK_COUNT = 50
+HISTORY_DATA_SEND_COUNT = 50
+HISTORY_TODAY_DATA_SEND_COUNT = 50
+
+OP_ID_S2C_STOCK_NAME_SEND = 100
+OP_ID_S2C_HISTORY_DATA_SEND = 101
+OP_ID_S2C_REAL_TIME_DATA_SEND = 102
+OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104
 
 OP_ID_C2S_QUICK_BUY = 120
 OP_ID_C2S_QUICK_SELL = 121
+
+#0v0
+#=-=
+#1234
 
 def VolumeMonitorDebug():
     pass
@@ -51,6 +64,45 @@ class TargetInfo:
         self.total_holding = 0 # 这里的总量并不从pos中取，而是从完成（部成）的order中记录，因为我发现完全用pos中的有时候数据更新不及时，比如部成的数量都已经显示有10000股了，且已经输出到日志中，但是紧接着马上取pos中的持仓，却还没有更新到该值，取出来可能是4，5000，虽然这个发生的几率很小，但是还是需要处理
         self.partial_holding = 0 # 记录部成的临时值
         self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
+        self.pre_quick_buy_amount = 0 # 准备急速买入的额度
+
+class BuyMode:
+    def __init__(self):
+        # 注意每个策略下面只能设定一种对应的买入模式（也就是只有一种可以激活到1）！！
+        self.buy_all = 0 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
+        self.buy_one = 1 # 买一只，并指定对应的价格
+        self.buy_all_force = 0 # 一定要保证买入所有（对应数量非常大的买入，且有很多高价股，均分值无法覆盖高价股）
+
+class OrderTypeBuy:
+    def __init__(self):
+        # 选择整体的订单交易模式，限价或者市价，只能激活一种！！
+        self.Limit = 0
+        self.Market = 1
+
+class OrderTypeSell:
+    def __init__(self):
+        # 选择整体的订单交易模式，限价或者市价，只能激活一种！！
+        self.Limit = 0
+        self.Market = 1
+
+class StrategyInfo:
+    def __init__(self):
+        # 指定策略对应的模式，策略A就对应A=1，一次只能激活一种策略！！
+        self.A = 0
+        self.AC = 0
+        self.A1 = 0
+        self.AA = 0
+        self.B = 1
+        self.B1 = 0
+        self.BA = 0
+        self.C = 0
+        self.M = 0
+
+        self.buy_mode = BuyMode()
+        self.order_type_buy = OrderTypeBuy()
+        self.order_type_sell = OrderTypeSell()
+
+        self.slip_step = 5 # 滑点级别，1-5，要突破5的话，可以自己算？
 
 # 策略中必须有init方法
 def init(context):
@@ -72,6 +124,7 @@ def init(context):
     context.symbol_arr = {}
     context.his_symbol_data_arr = set()
     context.his_data_dic = {}
+    context.all_his_data_dic = {} # 所有标的历史数据，其中也包含未在列表中的标的，key--symbol, value--list(包含当日所有历史数据的list)
     context.his_today_data_dic = {}
     context.cur_data_dic = {}
     context.cur_data_second_dic = {}
@@ -79,6 +132,7 @@ def init(context):
     context.new_socket_dic = {}
     context.client_init_complete_dic = {}
     context.init_client_socket_dic = {}
+    context.client_order = {}
 
     context.delete_client_socket_arr = []
     context.delete_temp_adress_arr = []
@@ -87,7 +141,23 @@ def init(context):
     context.init_complete_client = {}
     context.ids = {}
     context.ids_info_dict = {} # 记录一些tick中的标的数据，方便在其他地方的时候可以使用，数据格式为：key：标的字符串  value：是TargetInfo类型
+    context.client_order = {} # 记录正在进行中的订单，防止重复买入和卖出
+    context.pre_quick_buy_dict = {} # 在socket收到消息后，不要马上买入，因为价格并不准确，需要在tick激活时买入
+    context.pre_quick_sell_dict = {} # 同上，用于卖出    
+    context.strategy_info = StrategyInfo() # 保存策略信息以及买入方式到全局变量中
+    
+    if context.strategy_info.order_type_buy.Limit == 1:
+        context.order_type_buy = OrderType_Limit
+    elif context.strategy_info.order_type_buy.Market == 1:
+        context.order_type_buy = OrderType_Market
+
+    if context.strategy_info.order_type_sell.Limit == 1:
+        context.order_type_sell = OrderType_Limit
+    elif context.strategy_info.order_type_sell.Market == 1:
+        context.order_type_sell = OrderType_Market
+    
     context.is_subscribe = False
+    context.is_can_show_print = False
     context.iniclient_socket_lock = threading.Lock()
 
     context.temp_clear_curdata_index = 0
@@ -110,7 +180,6 @@ def init(context):
     load_mac_address(context)
 
     # 线程Server 正式服12345, 调试服12346   3
-    # 这个是新版新版新版新版新版新版
     main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
     main_server_thread.start()
 
@@ -121,6 +190,7 @@ def init(context):
     # load_ids(context)
     # test_get_data(context)
     # get_history_data_in_today(context)
+    # load_history_from_file(context)
 
 
 #模拟线程，关盘后调试用
@@ -128,10 +198,10 @@ def simulation_on_bar(context):
 
     test_count_index = 0
 
-    test_time_d = '2024-06-17 '
-    test_time_h = '14'
-    test_time_m = '20'
-    test_time_s = '00+08:00'
+    test_time_d = '2024-07-05 '
+    test_time_h = '10'
+    test_time_m = '00'
+    test_time_s = '00.00013+08:00'
 
     test_time_time = test_time_d + test_time_h + ':' + test_time_m + ':' + test_time_s
     #'2024-5-15 14:20:00+08:00'
@@ -140,7 +210,7 @@ def simulation_on_bar(context):
         time.sleep(3)
         for sy in context.subscription_stock_arr:
             context.cur_data_dic.clear()
-            context.cur_data_dic[sy] = PackCurrentDataFrame(sy, '100000.0', test_time_time).to_dict()
+            context.cur_data_dic[sy] = PackSecondDataFrame(sy, '10000', test_time_time).to_dict()
 
             #if context.socket_dic:
             #    for k,v in context.socket_dic.items():
@@ -222,26 +292,29 @@ def subscribe_method(context):
     # subscribe(symbols=temp_ids_str, frequency='60s', count=1, unsubscribe_previous=False, wait_group=True)
 
     info = get_instruments(symbols = context.symbol_str, skip_suspended = False, skip_st = False, df = True)
-    print(f"info length:{len(info)}")
 
     for i in range(len(info)):
         print(f"{info.symbol[i]}|{info.sec_name[i]}")
         context.temp_matching_dic[info.symbol[i]] = info.sec_name[i]
 
+    print(f"ids count:{len(info)}")
+    
 
-
-#初始化客户端，一次性传输数据，
+#初始化客户端，一次性传输数据
 def init_client_one_time(context):
 
     if context.is_subscribe == False:
 
         subscribe_method(context)
 
-        test_get_data(context)
+        # test_get_data(context)
+
+        #这个一定要放在subscribe_method(context),不然获取不了需要订阅的标的
+        load_history_from_file(context)
 
         context.is_subscribe = True
 
-
+        context.is_can_show_print = False
 
     if_complete = 0
 
@@ -271,68 +344,93 @@ def init_client_one_time(context):
                         now_data = context.now
                         print(f"{now_data}")
 
+                        #OP_ID_S2C_STOCK_NAME_SEND
+                        #这里先将名字传输过去
+                        #===================================
+                        #1-4 OP_ID_S2C_STOCK_NAME_SEND
+                        ready_send_name_bytes = OP_ID_S2C_STOCK_NAME_SEND.to_bytes(4, byteorder="big")
+                        #2-4 int32 标的名称总数量
+                        stock_name_count = len(context.temp_matching_dic)
+                        ready_send_name_bytes += stock_name_count.to_bytes(4, byteorder="big")
+
+                        client_socket.sendall(ready_send_name_bytes)
+
+                        for key, valume in context.temp_matching_dic.items():
+                            ready_send_name_str = key + "+" + valume
+                            send_data = ready_send_name_str.encode('utf-8')
+                            send_length = len(send_data).to_bytes(4, byteorder='big')
+                            client_socket.sendall(send_length)
+                            print(f"{ready_send_name_str}")
+                            client_socket.sendall(send_data)
+
+                        #===================================
+
                         yesterday_date = get_previous_or_friday_date()
                         temp_yesterday_eob = str(yesterday_date) + " " + "09:26:00+08:00"
                         #这里将头天的25分钟数据改为26分钟，是为了方便在客户端里的update_label_for_single中方便拿取历史记录
                         #当天的25分钟，不需要改为26分钟,在初始化当天历史时，需要改，如果不需要，则是25分钟
-
-                        temp_num = 0
                         #这里直接将25分钟数据存入25分钟以及26分钟，方便客户端判断，暂时这样吧   '2024-06-07'
-                        for i in range(2):
-                            if i == 0:
-                                test_yesterday_eob = str(yesterday_date) + " " + "09:25:00+08:00"
-                            else:
-                                test_yesterday_eob = str(yesterday_date) + " " + "09:26:00+08:00"
+                        #这里需要改为由文件中获取历史数据，文件中已包含了25分钟集合进价!!文件中集合进价同样保存为25,26分钟
+                        temp_num = 0
 
-                            #先将25min数据装入dic
-                            for his_25_val in context.his_25_amount_data:
-                                context.his_data_dic[str({temp_num})] = PackHistoryDataFrame(his_25_val['symbol'], his_25_val['last_amount'], test_yesterday_eob, context.temp_matching_dic[his_25_val['symbol']]).to_dict()
-                                temp_num += 1
-                            #将没有数据的标的，赋予0.0值装入dic
-                            for notin_his_25_val in context.notin_25_stock_arr:
-                                context.his_data_dic[str({temp_num})] = PackHistoryDataFrame(notin_his_25_val, 0.0, test_yesterday_eob, context.temp_matching_dic[notin_his_25_val]).to_dict()
+                        #这里改为，只将列表中的标的存入his_data_dic,不存全部标的
+                        # for his_val in context.his_data.values():
+                        #     context.his_data_dic[str({temp_num})] = PackHistoryDataFrame(his_val['symbol'], his_val['amount'], str(his_val['eob']), 'temp').to_dict() # context.temp_matching_dic[his_val['symbol']]
+                        #     temp_num += 1
+
+                        for symbol in context.subscription_stock_arr:
+                            for symbol_data in context.all_his_data_dic[symbol]:
+                                context.his_data_dic[str({temp_num})] = PackHistoryDataFrame(symbol_data['symbol'], symbol_data['amount'], str(symbol_data['eob']), 'temp').to_dict()
                                 temp_num += 1
 
-                        #打包历史数据对象,装入dic
-                        for his_val in context.his_data:
-                            context.his_data_dic[str({temp_num})] = PackHistoryDataFrame(his_val['symbol'], his_val['amount'], str(his_val['eob']), context.temp_matching_dic[his_val['symbol']]).to_dict()
-                            temp_num += 1
+                        print(f"ready for send hisotry data length::{len(context.his_data_dic)}")
 
-                        his_data_dic_json = json.dumps(context.his_data_dic)
-                        hddj_len = len(his_data_dic_json.encode('utf-8'))
-                        print(f"hddj_len:{hddj_len}")
+                        #这里接着改，尝试改为二进制传输==========
+                        #包头+4，一次传输数量+4,(4+4+4+4+4)+(4+4+4+4+4)+.......(*传输数量)
+                        #可以用for循环来拼接
 
-                        #耗时测试
-                        print(f"ReciveClientThreadC----总耗时为01:{time.time()-t:4f}s")
+                        #1-4 int32 包头
+                        #OP_ID_S2C_HISTORY_DATA_SEND
+                        
+                        #2-4 int32 历史数据数量总数
+                        history_data_count = len(context.his_data_dic)
+                        history_data_count_bytes = history_data_count.to_bytes(4, byteorder="big")
 
-                        #这里先传包头，然后传数据长度，最后传数据
-                        context.operation_id_send = 101
-                        operation_id_byte = context.operation_id_send.to_bytes(4, byteorder='big')
-                        client_socket.sendall(operation_id_byte)
+                        ready_send_data_bytes = OP_ID_S2C_HISTORY_DATA_SEND.to_bytes(4, byteorder="big") + history_data_count_bytes
 
-                        hddj_len_byte = hddj_len.to_bytes(4, byteorder='big')
-                        client_socket.sendall(hddj_len_byte)
+                        #先发送包头+数据总数
+                        client_socket.sendall(ready_send_data_bytes)
 
-                        #改为分段传输=========================
-                        off_set = 0
+                        arrive_index_for_send = 0
+                        residue_data_count = history_data_count
+                        #这里要判断一下，当dic中数据总数小于HISTORY_DATA_SEND_COUNT时，这里又可能用不上，但还是加上吧
+                        if history_data_count < HISTORY_DATA_SEND_COUNT:
+                            temp_send_count = history_data_count
+                        else:
+                            temp_send_count = HISTORY_DATA_SEND_COUNT
+                        ready_send_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
+                        #拼接待发送的数据，byte类型
+                        for valume in context.his_data_dic.values():
+                            history_data_bytes = translate_send_data_to_bytes(context, valume['symbol'], valume['amount'], valume['eob'])
+                            ready_send_data_bytes += history_data_bytes
 
-                        while off_set < hddj_len:
+                            arrive_index_for_send += 1
+                            #达到发送的数量时，发送
+                            if arrive_index_for_send == temp_send_count:
+                                client_socket.sendall(ready_send_data_bytes)
+                                residue_data_count -= arrive_index_for_send
+                                arrive_index_for_send = 0
 
-                            chunk = his_data_dic_json[off_set:off_set + context.chunk_size]
+                                if residue_data_count > HISTORY_DATA_SEND_COUNT:
+                                    temp_send_count = HISTORY_DATA_SEND_COUNT
+                                else:
+                                    temp_send_count = residue_data_count
 
-                            client_socket.sendall(chunk.encode())
+                                ready_send_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
 
-                            off_set += context.chunk_size
                         #=====================================
 
-                        #这里不等一下，json就会报错，暂时不知道为什么
-                        # time.sleep(0.02)
-                        # client_socket.sendall(his_data_dic_json.encode('utf-8'))
-
                         #这里需要判断客户端连接的此刻时间之前，是否有当日历史数据，如果有，需要全部传过去包括
-                        #上面on_tick里，需要改成，只要客户端连接，就发送数据，不需要等待客户端发来完成初始化在发，以免漏掉数据
-                        # get_history_data_in_today(context)
-
                         get_now_time_arr = str(now_data).split("+")
                         get_now_time_arr_1 = get_now_time_arr[0].split(" ")
                         get_now_day = get_now_time_arr_1[0]
@@ -368,40 +466,59 @@ def init_client_one_time(context):
                         for his_today_val in context.his_data_for_today:
                             context.his_today_data_dic[str({temp_num})] = PackHistoryDataFrame(his_today_val['symbol'], his_today_val['amount'], str(his_today_val['eob']), 'his_today_data').to_dict()
                             temp_num += 1
-                        #将当前分钟内的数据打包进dic里
-                        #这里时间要需要+1分钟
-                        # for key, value in context.temp_total_second_data.items():
-                        #     # context.his_today_data_dic[str({temp_num})] = PackHistoryDataFrame(key, value, second_time_eob, 'his_today_data').to_dict()
-                        #     context.ready_second_for_send.append(PackHistoryDataFrame(key, value, second_time_eob, 'his_today_data').to_dict())
-                        #     temp_num += 1
 
-                        his_today_data_dic_json = json.dumps(context.his_today_data_dic)
-                        htddj_len = len(his_today_data_dic_json.encode('utf-8'))
-                        print(f"htddj_len:{htddj_len}")
+                        #=====================================
 
-                        context.operation_id_send = 104
-                        operation_id_byte = context.operation_id_send.to_bytes(4, byteorder='big')
-                        client_socket.sendall(operation_id_byte)
+                        #这里接着改，尝试改为二进制传输==========
 
-                        htddj_len_byte = htddj_len.to_bytes(4, byteorder='big')
-                        client_socket.sendall(htddj_len_byte)
+                        #1-4 int32 包头
+                        #OP_ID_S2C_HISTORY_TODAY_DATA_SEND
+                        
+                        #2-4 int32 历史数据数量总数
+                        history_today_data_count = len(context.his_today_data_dic)
+                        history_today_data_count_bytes = history_today_data_count.to_bytes(4, byteorder="big")
 
-                        #改为分段传输=========================
-                        off_set = 0
+                        ready_send_today_data_bytes = OP_ID_S2C_HISTORY_TODAY_DATA_SEND.to_bytes(4, byteorder="big") + history_today_data_count_bytes
 
-                        while off_set < htddj_len:
+                        #先发送包头+数据总数
+                        client_socket.sendall(ready_send_today_data_bytes)
 
-                            chunk = his_today_data_dic_json[off_set:off_set + context.chunk_size]
+                        arrive_index_for_send = 0
+                        residue_data_count = history_today_data_count
+                        #这里要判断一下，当dic中数据总数小于HISTORY_TODAY_DATA_SEND_COUNT时，这里又可能用不上，但还是加上吧
+                        if history_today_data_count < HISTORY_TODAY_DATA_SEND_COUNT:
+                            temp_send_count = history_today_data_count
+                        else:
+                            temp_send_count = HISTORY_TODAY_DATA_SEND_COUNT
+                        ready_send_today_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
+                        #拼接待发送的数据，byte类型
+                        for valume in context.his_today_data_dic.values():
+                            # print(f"{valume['symbol']}:{valume['amount']}:{valume['eob']}")
+                            history_data_bytes = translate_send_data_to_bytes(context, valume['symbol'], valume['amount'], valume['eob'])
+                            ready_send_today_data_bytes += history_data_bytes
 
-                            client_socket.sendall(chunk.encode())
+                            arrive_index_for_send += 1
+                            #达到发送的数量时，发送
+                            if arrive_index_for_send == temp_send_count:
+                                client_socket.sendall(ready_send_today_data_bytes)
+                                residue_data_count -= arrive_index_for_send
+                                arrive_index_for_send = 0
 
-                            off_set += context.chunk_size
+                                if residue_data_count > HISTORY_TODAY_DATA_SEND_COUNT:
+                                    temp_send_count = HISTORY_TODAY_DATA_SEND_COUNT
+                                else:
+                                    temp_send_count = residue_data_count
+
+                                ready_send_today_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
+
                         #=====================================
 
                         val.is_init = True
                         val.is_initing = False
 
                         if_complete = 1
+
+                        context.is_can_show_print = True
 
                         #耗时测试
                         print(f"ReciveClientThreadC----总耗时为02:{time.time()-t:4f}s")
@@ -418,88 +535,96 @@ def init_client_one_time(context):
             # 不能在这里删除dict的item，因为你外面那层正在遍历中，先记录下来，出这个函数后再删
             context.delete_client_socket_arr.append(del_init_member)
 
-            # 关盘后，模拟on_bar用,用这个，上面模拟线程on_bar暂时保留
-            #simulation_on_bar(context)
-
-#这里尝试更改为线程，去拿取所有历史数据，包括当天历史数据, 暂时不考虑
-def init_client_when_get_all_data(context):
-    pass
-
-#初始化客户端，分段传输数据，暂时没用
-def init_client_fragments(context):
-
-    if_complete = 0
-
-    while if_complete == 0:
-            time.sleep(0.1)
-            if context.init_client_socket_dic:
-                client_socket = ""
-                for val in context.init_client_socket_dic.values():
-                    client_socket = val
-
-                t = time.time()
-                print(f"ready")
-
-                test_get_data(context)
-
-                temp_num = 0
-                for his_val in context.his_data:
-                    context.his_data_dic[str({temp_num})] = PackHistoryDataFrame(his_val['symbol'], his_val['amount'], str(his_val['eob'])).to_dict()
-                    temp_num += 1
-
-                print(f"===={len(context.his_data_dic)}")
+            # 关盘后，模拟on_bar用,用这个
+            # simulation_on_bar(context)
 
 
-                his_data_dic_json = json.dumps(context.his_data_dic)
-                hddj_len = len(his_data_dic_json.encode('utf-8'))
-                print(f"hddj_len:{hddj_len}")
+#由于tick中内容代码过多，尝试将各部分代码进行封装!!!
 
-                #耗时测试
-                print(f"ReciveClientThreadC----总耗时为01:{time.time()-t:4f}s")
-
-                off_set = 0
-
-                while off_set < hddj_len:
-
-                    time.sleep(0.1)
-
-                    chunk = his_data_dic_json[off_set:off_set + context.chunk_size]
-                    length = len(chunk)
-
-                    print(f"{chunk}")
-
-                    packed_length = struct.pack(context.LENGTH_FORMAT, length)
-
-
-                    client_socket.sendall(packed_length)
-
-                    client_socket.sendall(chunk.encode())
-
-                    off_set += context.chunk_size
-
-                #耗时测试
-                print(f"ReciveClientThreadC----总耗时为02:{time.time()-t:4f}s")
-                if_complete = 1
-
-def on_tick(context, tick):
+#__tick__
+def handle_pre_quick_order(context, tick):
     
-    # 更新对应标的的一些保存信息
-    if tick.symbol in context.ids_info_dict.keys():
-        context.ids_info_dict[tick.symbol].price = tick.price
+    # 如果client order还没有处理完，也返回
+    if tick.symbol in context.client_order.keys():
+        print(f'{tick.symbol}订单没有处理完毕，直接返回')
+        return
+    
+    # 检测处理标的是否存在于队列中
+    if tick.symbol in context.pre_quick_buy_dict.keys():
         
-        # 持仓不要一直获取，下面拿pos的函数延迟很大，需要特别注意！！！
-        if context.ids_info_dict[tick.symbol].hold_available == 0:
-            # 获取当前持仓
-            curHolding = 0
-            # 这里的Side一定要标注正确，比如我是买入的脚本，里面有个都是使用的Buy类型
-            # 验证了下，获取买入后的持仓都是Buy类型，不是我想象的sell就要获取sell类型，我估计期货才用这个
-            pos = context.account().position(symbol = tick.symbol, side = OrderSide_Buy)
-            if not pos:
-                context.ids_info_dict[tick.symbol].hold_available = 0
-            else:
-                context.ids_info_dict[tick.symbol].hold_available = pos.available_now
-                # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
+        # 最新价格，目前使用的最新价格，我们直接用买（卖）5的价格
+        # 也就是我们目前使用滑点5的设置
+        # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
+        curVal = tick.price
+        curVal1_5 = [tick.quotes[0]['ask_p'], tick.quotes[1]['ask_p'], tick.quotes[2]['ask_p'], tick.quotes[3]['ask_p'], tick.quotes[4]['ask_p']] #卖1-5价格
+        # 这里需要对值进行检测，有时候买卖5是空的，需要选择一个有效值
+        curVal5 = 0
+        for idx in range(0, context.strategy_info.slip_step):
+            if (curVal1_5[context.strategy_info.slip_step - 1 - idx] != 0):
+                curVal5 = curVal1_5[context.strategy_info.slip_step - 1 - idx]
+                break
 
+        if (curVal5 == 0) and (context.strategy_info.order_type_buy.Market == 0):
+            log(f"[{tick.symbol}][try buy]--this should not happen, all values are 0, return for tmp")
+            return
+
+        # 使用市价的话，不再使用滑点价格，而是使用涨停价格（跟卷商人员确认过）
+        # 买入市价保护价范围是当前价到涨停价（跟陈老师确认过）
+        # 填涨停价会冻结较多资金，满仓时资金可能会不够，可以填卖五价，确保尽快成交吧（跟陈老师确认过）
+        # 那其实意思就是即便是市价，还是建议用买5的价格计算数量，以及填入最终的保护价
+        upper_limit = curVal5
+        if (context.strategy_info.order_type_buy.Market == 1) and (tick.symbol in context.ids_info_dict.keys()):
+            # [奇点！]本来为了保证市价一定买入的话，应该填入的买入价格是涨停价，也确实可以这么填，但是这么填的话，有个问题，就是会少买很多股数进来。。。
+            # 所以最后，在市价的情况下，我们作为妥协，还是选择买5的价格来操作，这样不会剩下太多余额
+            upper_limit = context.ids_info_dict[tick.symbol].upper_limit
+        
+        base_num = 1
+        # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
+        # TODO:科创至少200
+        buy_in_num = math.floor(context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / (curVal5 * 1.002)) # 预留0.2%的手续费，先观察是否合理
+        base_num = math.floor(buy_in_num / 100)
+        
+        # 科创股至少买200，检查如果是100的话，能买的起200就买
+        tech_flag = ((tick.symbol.find('.688') != -1) or (tick.symbol.find('.689') != -1))
+        if tech_flag and base_num == 1:
+            base_num = 2
+        
+        # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求），这个后面跟陈老师确认了，沪市和科创板还是必须要填入保护价（不填的话就会买入失败）
+        # 发现了有些标的存在不能直接指定市价不指定价格，无法买入，报错返回有市价保护，那我们还是把price带上，Market的话则使用涨停价格
+        log(f"开始尝试急速购买标的[{tick.symbol}]-[{context.pre_quick_buy_dict[tick.symbol].pre_quick_buy_amount / 10000}]万元，股数[{base_num * 100}]，买入价格[{round(curVal5, 2)}]，是否市价[{(context.strategy_info.order_type_buy.Market == 1)}]")
+        
+        if context.strategy_info.order_type_buy.Limit == 1:
+            list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
+        elif context.strategy_info.order_type_buy.Market == 1:
+            # 目前上下看起来一样，但是逻辑上是不同的，只是因为暂时我们没有使用涨停价的原因（会导致买不完余额）
+            list_order = order_volume(symbol=tick.symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=context.order_type_buy, position_effect=PositionEffect_Open, price=curVal5)
+        
+        # 记录order的client id，避免出现之前的重复购买
+        # 只有当id在order status的回掉中，出现已成（不是部成）或者被拒绝的时候，才开放再次购买
+        # 需要一定的数据格式，记录在context全局变量中，这样不会被擦除
+        # 数据信息：{symbol:[list_order]}，直接把list_order一下装进去吧，也不用费事单独拆一些数据了
+        context.client_order[tick.symbol] = list_order
+        
+    if tick.symbol in context.pre_quick_sell_dict.keys():
+        
+        sell_num = 100        
+        if (tick.symbol in context.ids_info_dict.keys()) and (context.ids_info_dict[tick.symbol].hold_available > 0):
+            sell_num = context.ids_info_dict[tick.symbol].hold_available
+        
+        # 直接使用市价卖出，则可以不指定卖出价格（居然根据佳哥需求）
+        # [TODO]需要观察是否卖出也存在不能不指定价格的情况，目前暂时好像没有，有的话，也需要改为指定跌停价卖出！
+        log(f"开始尝试急速卖出标的（市价-不指定price）[{tick.symbol}]--[{sell_num}]")
+        list_order = order_volume(symbol=tick.symbol, volume=sell_num, side=OrderSide_Sell, order_type=OrderType_Market, position_effect=PositionEffect_Close)
+        
+        # 记录order的client id，避免出现之前的重复购买
+        # 只有当id在order status的回掉中，出现已成（不是部成）或者被拒绝的时候，才开放再次购买
+        # 需要一定的数据格式，记录在context全局变量中，这样不会被擦除
+        # 数据信息：{symbol:[list_order]}，直接把list_order一下装进去吧，也不用费事单独拆一些数据了
+        context.client_order[tick.symbol] = list_order
+
+
+#__tick__客户端断开连接后，从dic中删除断开连接的socket
+def delete_socket(context):
     #客户端断开连接后，从socket_dic中移除相应sokcet
     if len(context.delete_temp_adress_arr) > 0:
 
@@ -509,6 +634,8 @@ def on_tick(context, tick):
 
         context.delete_temp_adress_arr = []
 
+#__tick__对连接进来的客户端进行初始化
+def init_client_method(context):
     if context.init_client_socket_dic:
 
         context.iniclient_socket_lock.acquire()
@@ -526,85 +653,191 @@ def on_tick(context, tick):
 
         context.iniclient_socket_lock.release()
 
-    #=-===============================================================
+#__tick__更新对应标的对应保存信息
+def update_ids_info_method(context, tick):
+    # 更新对应标的的一些保存信息----------------------------------------
+    if tick.symbol in context.ids_info_dict.keys():
+        context.ids_info_dict[tick.symbol].price = tick.price
+        
+        if context.ids_info_dict[tick.symbol].name == "":
+            info = get_instruments(symbols = tick.symbol, skip_suspended = False, df = True)
+            # empty情况一般就是ST的股票，直接先跳过不处理
+            if info.empty:
+                print(f"[init][{tick.symbol}]get cache info null, this should not happen[可能是停牌]......")
+            else:
+                context.ids_info_dict[tick.symbol].name = info.sec_name[0]
+                context.ids_info_dict[tick.symbol].upper_limit = info.upper_limit[0]
+        
+        # 持仓不要一直获取，下面拿pos的函数延迟很大，需要特别注意！！！
+        if context.ids_info_dict[tick.symbol].hold_available == 0:
+            # 获取当前持仓
+            curHolding = 0
+            # 这里的Side一定要标注正确，比如我是买入的脚本，里面有个都是使用的Buy类型
+            # 验证了下，获取买入后的持仓都是Buy类型，不是我想象的sell就要获取sell类型，我估计期货才用这个
+            pos = context.account().position(symbol = tick.symbol, side = OrderSide_Buy)
+            if not pos:
+                context.ids_info_dict[tick.symbol].hold_available = 0
+            else:
+                context.ids_info_dict[tick.symbol].hold_available = pos.available_now
+                # print(f"{tick.symbol} 今持：{context.ids_info_dict[tick.symbol].hold_available} 总持：{pos.volume} 可用：{pos.available_now}")
+
+#__tick__向正在初始化的客户端，发送
+def send_data_in_first(context, v):
+    #这里先发获得历史中的当前分钟内的数据
+    if len(context.ready_second_for_send) > 0:
+        print(f"context.ready_second_for_send::{len(context.ready_second_for_send)}")
+        for second_data in context.ready_second_for_send:
+            context.cur_data_dic.clear()
+            context.cur_data_dic[second_data['symbol']] = second_data
+            print(f"context.ready_second_for_send::{second_data['symbol']}::{second_data['amount']}::{second_data['eob']}")
+            send_message_second_method(v, context)
+        #不能再这里做清空，下面需要对比是否有重复数据
+        # context.ready_second_for_send.clear()
+
+    #这里在初始化完成后，第一次发送数据，这里可能会有点问题！！！
+    if len(context.ready_for_send) > 0:
+        print(f"context.ready_for_send::{len(context.ready_for_send)}")
+        for ready_data in context.ready_for_send:
+            context.cur_data_dic.clear()
+            context.cur_data_dic[ready_data['symbol']] = ready_data
+            # print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
+            
+            #这里需要遍历ready_second_for_send,查看是否有重复数据
+            for second_data in context.ready_second_for_send:
+                if ready_data['symbol'] == second_data['symbol']:
+                    if ready_data['eob'] != second_data['eob']:
+                        send_message_second_method(v, context)
+                    #这里将break tab了一下，不知道会不会有啥问题，看看先    
+                    break
+
+    if len(context.ready_for_send) > 0:
+        context.ready_for_send.clear()
+    if len(context.ready_second_for_send) > 0:
+        context.ready_second_for_send.clear()
+    
+#__tick__当客户端还在初始化时，存储tick来的新数据
+def storage_data_when_client_init(context):
+    for data_key, data_value in context.cur_data_dic.items():
+        temp_ready_for_send_data = data_value
+
+        temp_index = 0
+
+        #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
+        for find_symbol_data in context.ready_for_send:
+
+            temp_index += 1
+
+            if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
+                #获得当前数据的当前分钟
+                temp_cur_data_time = temp_ready_for_send_data['eob']
+
+                get_A_time_arr = temp_cur_data_time.split("+")
+                get_A_time_arr_1 = get_A_time_arr[0].split(" ")
+                get_A_time_arr_2 = get_A_time_arr_1[1].split(":")
+
+                get_A_min = get_A_time_arr_2[1]
+
+                #获得在集合中数据的当前分钟
+                temp_in_list_data_time = find_symbol_data['eob']
+
+                get_B_time_arr = temp_in_list_data_time.split("+")
+                get_B_time_arr_1 = get_B_time_arr[0].split(" ")
+                get_B_time_arr_2 = get_B_time_arr_1[1].split(":")
+
+                get_B_min = get_B_time_arr_2[1]
+
+                if get_A_min == get_B_min:
+
+                    temp_delete_amount = find_symbol_data['amount']
+                    temp_now_amount = temp_ready_for_send_data['amount']
+                    #当前分钟内同一只标的，数据相加
+                    temp_adding_amount = round(float(temp_delete_amount), 2) + round(float(temp_now_amount), 2)
+
+                    #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
+                    find_symbol_data['amount'] = str(temp_adding_amount)
+                    find_symbol_data['eob'] = temp_ready_for_send_data['eob']
+
+                    break
+
+        if temp_index == len(context.ready_for_send):
+            context.ready_for_send.append(temp_ready_for_send_data)    
+
+    print(f"ready_for_send length:{len(context.ready_for_send)}")
+
+#__tick__测试1分钟所掉数据相关代码代码，暂时没使用
+def test_1min_lose_data(context, tick):
+    #这段用于测试1分钟内，掉的数据,离开了当前分钟就不想客户端发送数据,暂时不用了!!!
+    if context.socket_dic:
+        for k,v in context.socket_dic.items():
+            if context.client_init_complete_dic[v] == False:
+                temp_current_time_arr = str(tick['created_at']).split(" ")
+                temp_c_hour_arr = temp_current_time_arr[1].split("+")
+                temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
+                temp_h_m_s = temp_int_c_hour_arr[0].split(":")
+
+                now_time_h = temp_h_m_s[0]
+                now_time_m = temp_h_m_s[1]
+                now_time_s = temp_h_m_s[2]
+
+                context.test_second_data_time = now_time_m
+
+            else:
+                temp_current_time_arr = str(tick['created_at']).split(" ")
+                temp_c_hour_arr = temp_current_time_arr[1].split("+")
+                temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
+                temp_h_m_s = temp_int_c_hour_arr[0].split(":")
+
+                now_time_h = temp_h_m_s[0]
+                now_time_m = temp_h_m_s[1]
+                now_time_s = temp_h_m_s[2]
+
+                context.test_next_second_data_time = now_time_m
+
+    # 上面那段是在这个 if context.socket_dic: 上面
+    # 下面那段是在这个 if context.socket_dic: 下面, 在send_data_in_first(context)这个后面
+
+    # 用于测试1分钟内，tick掉的数据，暂时不用了
+    if context.test_second_data_time == context.test_next_second_data_time:
+        context.cur_data_dic.clear()
+        context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
+        print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
+        send_message_second_method(v, context)
+
+
+
+def on_tick(context, tick):
+
+    # 更新对应标的的一些保存信息------------------------------------------------
+    update_ids_info_method(context, tick)
+                
+    # 处理待买入或者卖出的列表--------------------------------------------------
+    handle_pre_quick_order(context, tick)
+
+    # 客户端断开连接后，从socket_dic中移除相应sokcet-----------------------------
+    delete_socket(context)
+
+    # 初始化连入的客户端--------------------------------------------------------
+    init_client_method(context)
+
+    # 实时数据刷新刷新部分------------------------------------------------------
     if context.is_subscribe == True:
 
         if tick['symbol'] != 'SHSE.000001' :
             
+            #这里重复放一个这个是有点原因的，但是暂时想不起来了，后面可以来想想再改
             context.cur_data_dic.clear()
             context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
-
-            #这段用于测试1分钟内，掉的数据,离开了当前分钟就不想客户端发送数据,暂时不用了!!!
-            # if context.socket_dic:
-            #     for k,v in context.socket_dic.items():
-            #         if context.client_init_complete_dic[v] == False:
-            #             temp_current_time_arr = str(tick['created_at']).split(" ")
-            #             temp_c_hour_arr = temp_current_time_arr[1].split("+")
-            #             temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
-            #             temp_h_m_s = temp_int_c_hour_arr[0].split(":")
-
-            #             now_time_h = temp_h_m_s[0]
-            #             now_time_m = temp_h_m_s[1]
-            #             now_time_s = temp_h_m_s[2]
-
-            #             context.test_second_data_time = now_time_m
-
-            #         else:
-            #             temp_current_time_arr = str(tick['created_at']).split(" ")
-            #             temp_c_hour_arr = temp_current_time_arr[1].split("+")
-            #             temp_int_c_hour_arr = temp_c_hour_arr[0].split(".")
-            #             temp_h_m_s = temp_int_c_hour_arr[0].split(":")
-
-            #             now_time_h = temp_h_m_s[0]
-            #             now_time_m = temp_h_m_s[1]
-            #             now_time_s = temp_h_m_s[2]
-
-            #             context.test_next_second_data_time = now_time_m
             
             if context.socket_dic:
+
                 for k,v in context.socket_dic.items():
 
                     if context.client_init_complete_dic[v] == True:
 
-                        #这里先发获得历史中的当前分钟内的数据
-                        if len(context.ready_second_for_send) > 0:
-                            print(f"context.ready_second_for_send::{len(context.ready_second_for_send)}")
-                            for second_data in context.ready_second_for_send:
-                                context.cur_data_dic.clear()
-                                context.cur_data_dic[second_data['symbol']] = second_data
-                                print(f"context.ready_second_for_send::{second_data['symbol']}::{second_data['amount']}::{second_data['eob']}")
-                                send_message_second_method(v, context)
-                            #不能再这里做清空，下面需要对比是否有重复数据
-                            # context.ready_second_for_send.clear()
+                        #当客户端初始化完成后，向客户端发送第一次数据
+                        send_data_in_first(context, v)
 
-                        #这里在初始化完成后，第一次发送数据，这里可能会有点问题！！！
-                        if len(context.ready_for_send) > 0:
-                            print(f"context.ready_for_send::{len(context.ready_for_send)}")
-                            for ready_data in context.ready_for_send:
-                                context.cur_data_dic.clear()
-                                context.cur_data_dic[ready_data['symbol']] = ready_data
-                                # print(f"context.ready_for_send::{ready_data['symbol']}::{ready_data['amount']}::{ready_data['eob']}")
-                                
-                                #这里需要遍历ready_second_for_send,查看是否有重复数据
-                                for second_data in context.ready_second_for_send:
-                                    if ready_data['symbol'] == second_data['symbol']:
-                                        if ready_data['eob'] != second_data['eob']:
-                                            send_message_second_method(v, context)
-                                        #这里将break tab了一下，不知道会不会有啥问题，看看先    
-                                        break
-
-                        if len(context.ready_for_send) > 0:
-                            context.ready_for_send.clear()
-                        if len(context.ready_second_for_send) > 0:
-                            context.ready_second_for_send.clear()
-
-                        #用于测试1分钟内，tick掉的数据，暂时不用了
-                        # if context.test_second_data_time == context.test_next_second_data_time:
-                        #     context.cur_data_dic.clear()
-                        #     context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
-                        #     print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
-                        #     send_message_second_method(v, context)
-
+                        #由于在tick里，server与client的传输结构模式，这里需要补发一次当前tick来的数据
                         context.cur_data_dic.clear() 
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
                         send_message_second_method(v, context)
@@ -612,53 +845,11 @@ def on_tick(context, tick):
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
-                        for data_key, data_value in context.cur_data_dic.items():
-                            temp_ready_for_send_data = data_value
-
-                            temp_index = 0
-
-                            #这里需要优化，如果标的多，中途开启，这里会堆积数万条数据待发送，后期可能会数10万条，虽然最后面可能不会有中途开启情况，但先优化再说
-                            for find_symbol_data in context.ready_for_send:
-
-                                temp_index += 1
-
-                                if temp_ready_for_send_data['symbol'] == find_symbol_data['symbol']:
-                                    #获得当前数据的当前分钟
-                                    temp_cur_data_time = temp_ready_for_send_data['eob']
-
-                                    get_A_time_arr = temp_cur_data_time.split("+")
-                                    get_A_time_arr_1 = get_A_time_arr[0].split(" ")
-                                    get_A_time_arr_2 = get_A_time_arr_1[1].split(":")
-
-                                    get_A_min = get_A_time_arr_2[1]
-
-                                    #获得在集合中数据的当前分钟
-                                    temp_in_list_data_time = find_symbol_data['eob']
-
-                                    get_B_time_arr = temp_in_list_data_time.split("+")
-                                    get_B_time_arr_1 = get_B_time_arr[0].split(" ")
-                                    get_B_time_arr_2 = get_B_time_arr_1[1].split(":")
-
-                                    get_B_min = get_B_time_arr_2[1]
-
-                                    if get_A_min == get_B_min:
-
-                                        temp_delete_amount = find_symbol_data['amount']
-                                        temp_now_amount = temp_ready_for_send_data['amount']
-                                        #当前分钟内同一只标的，数据相加
-                                        temp_adding_amount = round(float(temp_delete_amount), 2) + round(float(temp_now_amount), 2)
-
-                                        #对这只标的，相关数据重新赋值，理论上应该将该只标的先删除，在重新添加进集合，先重新赋值看看有没有什么问题吧
-                                        find_symbol_data['amount'] = str(temp_adding_amount)
-                                        find_symbol_data['eob'] = temp_ready_for_send_data['eob']
-
-                                        break
-
-                            if temp_index == len(context.ready_for_send):
-                                context.ready_for_send.append(temp_ready_for_send_data)    
-
-                        print(f"ready_for_send length:{len(context.ready_for_send)}")
+                        #这里有点问题，可能会有重复数据出现，后面记得来改!!!
+                        storage_data_when_client_init(context)
                         
+
+#on_bar未使用，暂时保留
 def on_bar(context, bars):
 
     print(f"bars length:{len(bars)}")
@@ -690,6 +881,85 @@ def on_bar(context, bars):
             for k,v in context.socket_dic.items():
                 send_message_method(v, context)
 
+# 委托状态更新事件
+# 响应委托状态更新事情，下单后及委托状态更新时被触发。
+#注意：
+# 1、交易账户重连后，会重新推送一遍交易账户登录成功后查询回来的所有委托
+# 2、撤单拒绝，会推送撤单委托的最终状态
+'''
+order.status
+OrderStatus_Unknown = 0
+OrderStatus_New = 1                   # 已报
+OrderStatus_PartiallyFilled = 2       # 部成
+OrderStatus_Filled = 3                # 已成
+OrderStatus_Canceled = 5              # 已撤
+OrderStatus_PendingCancel = 6         # 待撤
+OrderStatus_Rejected = 8              # 已拒绝
+OrderStatus_Suspended = 9             # 挂起 （无效）
+OrderStatus_PendingNew = 10           # 待报
+OrderStatus_Expired = 12              # 已过期
+'''
+# 处理订单状态变化函数--------
+def on_order_status(context, order):
+    #print('--------on_order_status')
+    #print(order)
+
+    name = ""
+    if order.symbol in context.ids_info_dict.keys():
+        name = context.ids_info_dict[order.symbol].name
+
+    if order.ord_rej_reason != 0:
+        log(f"{order.symbol}:{name} 委托已被拒绝！具体原因如下：{order.ord_rej_reason_detail}")
+        # 被拒绝后，可以消除订单的记录
+        if order.symbol in context.client_order.keys():
+            del context.client_order[order.symbol]
+        if order.symbol in context.pre_quick_buy_dict.keys():
+            del context.pre_quick_buy_dict[order.symbol]
+        if order.symbol in context.pre_quick_sell_dict.keys():
+            del context.pre_quick_sell_dict[order.symbol]
+
+    # 订单全部成交的话（status == 3），可以消除订单记录
+    if order.status == OrderStatus_Filled:
+        # 更新买卖方向的相关信息
+        if order.side == OrderSide_Sell:
+            log(f'{order.symbol}:{name} 所有委托订单已成[卖出]，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
+        elif order.side == OrderSide_Buy:
+            log(f'{order.symbol}:{name} 所有委托订单已成[买入]，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
+        
+        if order.symbol in context.client_order.keys():
+            del context.client_order[order.symbol]
+        if order.symbol in context.pre_quick_buy_dict.keys():
+            del context.pre_quick_buy_dict[order.symbol]
+        if order.symbol in context.pre_quick_sell_dict.keys():
+            del context.pre_quick_sell_dict[order.symbol]
+
+#从文件中获取历史数据，其中包括了集合进价
+def load_history_from_file(context):
+    yesterday_date = get_previous_or_friday_date()
+    load_history_path = 'c:\\TradeLogs\\' + str_load_history + " " + str(yesterday_date) + '.npy' #加上日期，方便后面查找调用
+
+    context.his_data = np.load(load_history_path, allow_pickle=True)
+    context.his_data = dict(context.his_data.tolist())
+
+    # for value in context.his_data.values():
+    #     print(f"{value['symbol']}:{value['amount']}:{value['eob']}")
+
+    #这里需要改下，改为dic类型，一个symbol对应其相应历史数据list
+    #这样为了后续方便遍历已订阅的历史数据并发送给客户端，而不是发送全部历史数据(包含位订阅的)
+    #key--symbol, value--list   context.all_his_data_dic    
+    for val_data in context.his_data.values():
+        if val_data['symbol'] not in context.all_his_data_dic.keys():
+            temp_list = []
+            context.all_his_data_dic[val_data['symbol']] = temp_list
+
+    for value in context.his_data.values():
+        context.all_his_data_dic[value['symbol']].append(value)
+
+    # for key, value in context.all_his_data_dic.items():
+    #     print(f"{key}:{len(value)}")
+
+    print(f"load history success :{len(context.his_data)}")
+
 
 #拿到前一天的去全部历史数据，以每分钟为间隔
 def test_get_data(context):
@@ -697,22 +967,21 @@ def test_get_data(context):
     yesterday_date = get_previous_or_friday_date()
     s_time = str(yesterday_date) + ' 9:15:0'
     e_time = str(yesterday_date) + ' 15:00:0'
-    test_s_time = '2024-06-07' + ' 9:15:0'
-    test_e_time = '2024-06-07' + ' 15:00:0'
+    test_s_time = '2024-07-04' + ' 9:15:0'
+    test_e_time = '2024-07-04' + ' 15:00:0'
+    #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉
+    # s_time = test_s_time
+    # e_time = test_e_time
 
     print(f"{s_time} To {e_time}")
+    print(f"SECTION_HISTORY_STOCK_COUNT::{SECTION_HISTORY_STOCK_COUNT}")
 
     #这里将改为分批次获取历史数据，history中df=False时，返回的是一个集合
-    #这里我们用一个临时集合来接取数据，再将临时集合中的数据添加到context.his_data中
-    # context.his_data = history(symbol=context.symbol_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
-    # print(f"{len(context.his_data)}")
-
-    print(f"section_history_stock_count::{section_history_stock_count}")
-
     temp_ids_str = ''
     temp_index = 0
+    #这里我们用一个临时集合来接取数据，再将临时集合中的数据添加到context.his_data中
     temp_his_data = []
-    #先将存入集合中的标的代码，以section_history_stock_count为准拼接未字符串，用来分批次获得历史数据
+    #先将存入集合中的标的代码，以SECTION_HISTORY_STOCK_COUNT为准拼接未字符串，用来分批次获得历史数据
     for item in context.subscription_stock_arr:
             if temp_index == 0:
                 temp_ids_str = item
@@ -721,7 +990,7 @@ def test_get_data(context):
             temp_index += 1
 
             #当达到批次的数量时，开始获得历史数据
-            if temp_index == section_history_stock_count:
+            if temp_index == SECTION_HISTORY_STOCK_COUNT:
                 temp_his_data = history(symbol=temp_ids_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
                 print(f"temp_his_data length::{len(temp_his_data)}")
 
@@ -780,15 +1049,6 @@ def get_history_data_in_today(context):
     elif int(get_now_hour) < 9:
         get_now_hour = 9
     #==========================
-
-    #计算当前时间之前，以每分钟为单位，共有多少条数据, 暂时用不上
-    # min_count = 0
-    # if int(get_now_hour) >= 13:
-    #     min_count = (int(get_now_hour) - 13) * 60 + 120 + int(get_now_min)
-    # else:
-    #     min_count = (int(get_now_hour) - 9) * 60 + int(int(get_now_min))
-
-    # print(f"min_count::{min_count}")
     
     temp_ids_str = ''
     temp_index = 0
@@ -805,8 +1065,11 @@ def get_history_data_in_today(context):
     s_time= str(get_now_time_arr_1[0]) + ' 09:15:00'
     e_time = str(get_now_time_arr_1[0]) + ' ' + str(get_now_hour) + ':' + str(get_now_min) + ':' + '00'
     #test为测试时用的时间
-    test_s_time = '2024-06-19' + ' ' + '09:15:00'
-    test_e_time = '2024-06-19' + ' ' + '15:00:00'
+    test_s_time = '2024-07-05' + ' ' + '09:15:00'
+    test_e_time = '2024-07-05' + ' ' + '15:00:00'
+    #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉
+    # s_time = test_s_time
+    # e_time = test_e_time
 
     #这里为获取当日9:25的集合进价时间   2
     s_25_today_time = str(get_now_time_arr_1[0]) + ' 09:24:57'
@@ -826,20 +1089,16 @@ def get_history_data_in_today(context):
     s_second_time = str(one_minute_early)
 
     print(f"is stuck here 1?")
-    #这里同样需要像history那样，改成分段式拿取今天的此时段之前的所有数据
-    #这里将改为分批次获取历史数据，history中df=False时，返回的是一个集合
-    #这里我们用一个临时集合来接取数据，再将临时集合中的数据添加到context.his_data_for_today中
-    # context.his_data_for_today = history(symbol=context.symbol_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob', adjust=ADJUST_PREV, df=False)
-    
-    print(f"section_history_stock_count::{section_history_stock_count}")
+    print(f"SECTION_HISTORY_STOCK_COUNT::{SECTION_HISTORY_STOCK_COUNT}")
 
+    #这里同样需要像history那样，改成分段式拿取今天的此时段之前的所有数据
     temp_section_ids_str = ''
     temp_section_index = 0
     temp_his_today_data = []
     temp_his_data_for_today_second = []
     temp_his_25_amount_data = []
     temp_his_25_today_amount_data = []
-    #先将存入集合中的标的代码，以section_history_stock_count为准拼接未字符串，用来分批次获得历史数据
+    #先将存入集合中的标的代码，以SECTION_HISTORY_STOCK_COUNT为准拼接未字符串，用来分批次获得历史数据
     for item in context.subscription_stock_arr:
             if temp_section_index == 0:
                 temp_section_ids_str = item
@@ -848,7 +1107,7 @@ def get_history_data_in_today(context):
             temp_section_index += 1
 
             #当达到批次的数量时，开始获得历史数据
-            if temp_section_index == section_history_stock_count:
+            if temp_section_index == SECTION_HISTORY_STOCK_COUNT:
                 temp_his_today_data = history(symbol=temp_section_ids_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
                 print(f"temp_his_today_data length::{len(temp_his_today_data)}")
 
@@ -919,6 +1178,7 @@ def get_history_data_in_today(context):
         for temp_data in temp_his_25_amount_data:
             #这里应该要新创建一个变量
             temp_temp_data = temp_data
+            # print(f"{temp_data['symbol']}:{temp_data['last_amount']}:{temp_data['created_at']}")
             context.his_25_amount_data.append(temp_temp_data)
 
         #这里为分批次获取今日25分钟集合进价数据
@@ -938,34 +1198,10 @@ def get_history_data_in_today(context):
         temp_his_25_today_amount_data.clear()
 
     print(f"context.his_data_for_today length::{len(context.his_data_for_today)}")
-    print(f"here 1")
-
-    #这里面所有的都搬到分段里面去==========================================================================================================
-    # #这里拿到当前分钟内的数据
-    # e_second_time = str(get_now_time_arr_1[0]) + ' ' + str(get_now_hour) + ':' + str(get_now_min) + ':' + str(get_now_second)
-    # #注意!!!开始时间，例如9：53：00秒，此开始时间并不包含00秒数据，需要开始从9:52:59秒开始遍历!!!!!!!!!!
-    # temp_temp_translate_time = str(get_now_hour) + ":" + str(get_now_min) + ":" + '59'
-    # temp_translate_time = datetime.strptime(temp_temp_translate_time, "%H:%M:%S").time()
-    # now = datetime.now()  
-    # combined = datetime.combine(now.date(), temp_translate_time)
-    # one_minute_early = combined - timedelta(minutes=1) 
-    # s_second_time = str(one_minute_early)
-    
-    #把这里也搬到分批获取历史数据里面去
-    # print(f"is stuck here 2?")
-    # context.his_data_for_today_second = history(symbol=context.symbol_str, frequency='tick', start_time=s_second_time,  end_time=e_second_time, fields='symbol, last_amount, created_at', skip_suspended=False, fill_missing='NaN', adjust=ADJUST_PREV, df=False)
-    # print(f"here 2")
-
-    #这里history里，设置为tick,可以获得历史中的集合进价里的成交额，注意只有tick才行
-    #9点25分的集合进价里的成交额，将会在同花顺里的9点30分上显示 '2024-06-07 09:25:00'
-    # context.his_25_amount_data = history(symbol=context.symbol_str, frequency='tick', start_time=s_25_hisroty_time,  end_time=e_25_hisroty_time, fields='symbol, last_amount, created_at', skip_suspended=False, fill_missing='NaN', adjust=ADJUST_PREV, df=False)
-    #获得当日25分钟 必须是例如09:24:57--09:25:00 如果是9:25:00--9:25:00就不行，但是历史中的25分钟就可以这样拿
-    # context.his_25_today_amount_data = history(symbol=context.symbol_str, frequency='tick', start_time=s_25_today_time,  end_time=e_25_today_time, fields='symbol, last_amount, created_at', skip_suspended=False, fill_missing='NaN', adjust=ADJUST_PREV, df=False)
-
     print(f"his_25_amount_data length:{len(context.his_25_amount_data)}")
     print(f"his_25_today_amount_data length:{len(context.his_25_today_amount_data)}")
+    print(f"here 1")
 
-    #===================================================================================================================================
 
     temp_25_stock_arr = []
     temp_25_today_stock_arr = []
@@ -1016,8 +1252,6 @@ def get_history_data_in_today(context):
     # for item in context.ready_second_for_send:
     #     print(f"total@@@{item['symbol']}:::{item['amount']}:::{item['eob']}")
 
-
-    #抓出历史25分钟没有数据，和当日25分钟没有数据的，标的，并赋值为0
 
 def get_previous_or_friday_date():
     # 获取当前日期
@@ -1082,10 +1316,12 @@ def send_message_method(client_socket, context):
 
 
 #发送消息线程---102
-def send_message_second_method(client_socket, context):
+def send_message_second_method_backup(client_socket, context):
     try:
         #耗时测试
         #t = time.time()
+
+        #先尝试将102改成二进制发送
 
         context.operation_id_send = 102
         operation_id_byte = context.operation_id_send.to_bytes(4, byteorder='big')
@@ -1119,14 +1355,97 @@ def send_message_second_method(client_socket, context):
                         break
 
     finally:
-
         context.temp_clear_curdata_index += 1
-
         if context.temp_clear_curdata_index == len(context.socket_dic):
             context.cur_data_dic.clear()
             context.temp_clear_curdata_index = 0
 
-        #pass
+
+#重写发送消息线程---102，改为二进制发送
+def send_message_second_method(client_socket, context):
+    try:
+
+        #先尝试将102改成二进制发送  OP_ID_S2C_REAL_TIME_DATA_SEND - 102
+        #这里使用for循环，有一次发现dic里存在多条数据，但是几率非常非常小
+        for key, valume in context.cur_data_dic.items():
+            sned_data_bytes = translate_send_data_to_bytes(context, valume['symbol'], valume['amount'], valume['eob'])
+
+            #4+4+4+4+4+4 = 24字节
+            client_socket.sendall(OP_ID_S2C_REAL_TIME_DATA_SEND.to_bytes(4, byteorder='big') + sned_data_bytes)
+
+    except ConnectionResetError:
+         client_socket.close()
+         print("Client disconnected unexpectedly.")
+         print("In send method.")
+         
+         for key, valume in context.socket_dic.items():
+                    if client_socket == valume:
+                        context.delete_temp_adress_arr.append(key)
+                        context.client_init_complete_dic[client_socket] = False
+                        break
+
+    finally:
+        context.temp_clear_curdata_index += 1
+        if context.temp_clear_curdata_index == len(context.socket_dic):
+            context.cur_data_dic.clear()
+            context.temp_clear_curdata_index = 0
+
+#将待发送数据，转化为byte
+def translate_send_data_to_bytes(context, symbol, amount, eob):
+
+    temp_symbol_letter = 0
+    temp_symbol_num = 0
+    temp_amount = 0
+    temp_eob_date = 0
+    temp_eob_time = 0
+
+    #2-4 int32
+    temp_symbol_arr = symbol.split(".")
+    temp_symbol_letter = translate_letter_to_int(temp_symbol_arr[0])
+    symbol_letter_bytes = temp_symbol_letter.to_bytes(4, byteorder='big')
+
+    #3-4 int32
+    temp_symbol_num = int(temp_symbol_arr[1])
+    symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
+
+    #4-4 int32
+    temp_amount_without_dot = str(amount).split(".")
+    temp_amount = int(temp_amount_without_dot[0])
+    amount_bytes = temp_amount.to_bytes(4, byteorder='big')
+
+    #5-4 int32
+    if eob == None:
+        context_now = context.now
+        temp_eob_arr = str(context_now).split(" ")
+    else:
+        temp_eob_arr = eob.split(" ")
+
+    temp_eob_arr_date_arr = temp_eob_arr[0].split("-")
+    temp_temp_date = ''
+    for chunk in temp_eob_arr_date_arr:
+        temp_temp_date = temp_temp_date + chunk
+    temp_eob_date = int(temp_temp_date)
+    eob_date_bytes = temp_eob_date.to_bytes(4, byteorder='big')
+
+    #6-4 int32
+    temp_eob_arr_time_arr = temp_eob_arr[1].split("+")
+    temp_hhmmss_arr = temp_eob_arr_time_arr[0].split(":")
+    temp_temp_hhmmss = ''
+    for chunk in temp_hhmmss_arr:
+        temp_temp_hhmmss = temp_temp_hhmmss + chunk
+    #这里会有毫秒的情况，例如13:13:13.0000013的情况,如果没有，好像split也不会报错
+    temp_temp_hhmmss_without_dot = temp_temp_hhmmss.split(".")
+    temp_eob_time = int(temp_temp_hhmmss_without_dot[0])
+    eob_time_bytes = temp_eob_time.to_bytes(4, byteorder='big')
+
+    #4+4+4+4+4 = 20字节
+    send_bytes = symbol_letter_bytes + symbol_num_bytes + amount_bytes + eob_date_bytes + eob_time_bytes
+
+    #调试时，可以注释掉这里，方便查看问题!
+    # if temp_amount != 0 and context.is_can_show_print == True:
+    #     print(f"{temp_symbol_num}:{temp_amount}")
+    
+    return send_bytes
 
 def load_ids(context):
     # 看股票代码就能分辨，上证股票是在上海交易所上市的股票，股票代码以600、601、603开头，科创板（在上海交易所上市）股票代码以688开头
@@ -1191,8 +1510,8 @@ def load_ids(context):
             print(f'读取IDs配置错误：{str_tmp}')
 
         if buy_flag == False:
-            for item in context.subscription_stock_arr:
-                print(f"{item}")
+            # for item in context.subscription_stock_arr:
+            #     print(f"{item}")
             print(f"init total ids : {len(context.subscription_stock_arr)}")
             print(f"init ids down=========================")
             break
@@ -1254,20 +1573,26 @@ def load_mac_address(context):
                     if len(str_tmp) > 0:
                         context.mac_address_arr.append(str_tmp)
                         
-def translate_letter_to_int(context, str_letter):
 
-    # str_num = str(num)  
-    # # 使用列表推导式和字符串切片来拆解字符串  
-    # chunks = [str_num[i:i+2] for i in range(0, len(str_num), 2)]  
-    # # 如果需要，可以将子字符串再转回整数（但在这个例子中，我们保持它们为字符串）  
-    # # int_chunks = [int(chunk) for chunk in chunks]  
-    # return chunks  
+#将标的前面的英文转化为int类型
+def translate_letter_to_int(stork_letter):
 
-    # if int_letter == 10
+    # 使用列表推导式和字符串切片来拆解字符串  
+    chunks = [stork_letter[i:i+1] for i in range(0, len(stork_letter), 1)]  
+    
+    temp_split_joint_letter = ''
 
-    pass
+    for letter in chunks:
+        temp_int_letter = translate_letter_one_by_one(letter)
+        temp_split_joint_letter = temp_split_joint_letter + temp_int_letter
 
-def translate_letter_one_by_one(context, letter):
+    return int(temp_split_joint_letter)
+
+
+#将单个字母转换为自定义的int类型
+def translate_letter_one_by_one(letter):
+
+    #99,999,999 int32
 
     temp_int = 0
 
@@ -1278,51 +1603,53 @@ def translate_letter_one_by_one(context, letter):
     elif letter == 'C':
         temp_int = 12
     elif letter == 'D':
-        temp_int = 11
+        temp_int = 13
     elif letter == 'E':
-        temp_int = 11
+        temp_int = 14
     elif letter == 'F':
-        temp_int = 11
+        temp_int = 15
     elif letter == 'G':
-        temp_int = 11
+        temp_int = 16
     elif letter == 'H':
-        temp_int = 12
+        temp_int = 17
     elif letter == 'I':
-        temp_int = 11
+        temp_int = 18
     elif letter == 'J':
-        temp_int = 11
+        temp_int = 19
     elif letter == 'K':
-        temp_int = 11
+        temp_int = 20
     elif letter == 'L':
-        temp_int = 11
+        temp_int = 21
     elif letter == 'M':
-        temp_int = 12
+        temp_int = 22
     elif letter == 'N':
-        temp_int = 11
+        temp_int = 23
     elif letter == 'O':
-        temp_int = 11
+        temp_int = 24
     elif letter == 'P':
-        temp_int = 11
+        temp_int = 25
     elif letter == 'Q':
-        temp_int = 11
+        temp_int = 26
     elif letter == 'R':
-        temp_int = 12
+        temp_int = 27
     elif letter == 'S':
-        temp_int = 11
+        temp_int = 28
     elif letter == 'T':
-        temp_int = 11
+        temp_int = 29
     elif letter == 'U':
-        temp_int = 11
+        temp_int = 30
     elif letter == 'V':
-        temp_int = 11
+        temp_int = 31
     elif letter == 'W':
-        temp_int = 12
+        temp_int = 32
     elif letter == 'X':
-        temp_int = 11
+        temp_int = 33
     elif letter == 'Y':
-        temp_int = 11
+        temp_int = 34
     elif letter == 'Z':
-        temp_int = 11
+        temp_int = 35
+
+    return str(temp_int)
 
 def log(msg):
     file_obj = open(log_path, 'a')
@@ -1490,33 +1817,38 @@ class ReciveClientThreadC(threading.Thread):
         str_symbol = self.change_stock_int_to_string(buy_id)
         buy_amount = int.from_bytes(quick_buy_amount, byteorder='little')
         
-        print(f"准备开始处理急速购买标的[{str_symbol}]-[{buy_amount}]w")
-        base_num = 1
-        # 我们需要读取从tick中获取的数据，才能计算需要买入的数量，否则我们默认只买入100股（这里还有其他问题没有处理，比如科创股必须买200，可以参考策略B脚本）
-        # TODO:科创至少200
-        if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].price > 0):
-            buy_in_num = math.floor(buy_amount * 10000 / self.context.ids_info_dict[str_symbol].price)
-            base_num = math.floor(buy_in_num / 100)
+        # 如果client order还没有处理完，也返回
+        if str_symbol in self.context.client_order.keys():
+            print(f'{str_symbol}订单没有处理完毕，直接返回')
+            return
         
-        # 科创股至少买200，检查如果是100的话，能买的起200就买
-        tech_flag = ((str_symbol.find('.688') != -1) or (str_symbol.find('.689') != -1))
-        if tech_flag and base_num == 1:
-            base_num = 2
+        leftCash = self.context.account().cash['available'] # 余额
+        leftCash = math.floor(float('%.2f' % leftCash))
+        leftCash_int = int(leftCash)
+        # 限制买入的最大额度不会超过余额！
+        if ((buy_amount * 10000) > leftCash_int) and (leftCash_int > 0):
+            buy_amount = math.floor(leftCash_int / 10000);
+        # totalCash = self.context.account().cash['nav'] # 总资金
+        # totalCash = float('%.2f' % totalCash)
         
-        # 直接使用市价买入，则可以不指定买入价格（居然根据佳哥需求）
-        order_volume(symbol=str_symbol, volume=base_num * 100, side=OrderSide_Buy, order_type=OrderType_Market, position_effect=PositionEffect_Open)
+        # 没有初始化的话，就先初始化，将要买入的目标记录到列表中，待下次tick激活处理
+        if str_symbol not in self.context.pre_quick_buy_dict.keys():
+            self.context.pre_quick_buy_dict[str_symbol] = TargetInfo()
+        self.context.pre_quick_buy_dict[str_symbol].pre_quick_buy_amount = buy_amount * 10000
         
     def socket_receive_quick_sell(self):
         quick_sell_id = self.client_socket.recv(4)
         buy_id = int.from_bytes(quick_sell_id, byteorder='big')
         str_symbol = self.change_stock_int_to_string(buy_id)
         
-        sell_num = 100000
-        if (str_symbol in self.context.ids_info_dict.keys()) and (self.context.ids_info_dict[str_symbol].hold_available > 0):
-            sell_num = self.context.ids_info_dict[str_symbol].hold_available
+        # 如果client order还没有处理完，也返回
+        if str_symbol in self.context.client_order.keys():
+            print(f'{str_symbol}订单没有处理完毕，直接返回')
+            return
         
-        # 直接使用市价卖出，则可以不指定卖出价格（居然根据佳哥需求）
-        order_volume(symbol=str_symbol, volume=sell_num, side=OrderSide_Sell, order_type=OrderType_Market, position_effect=PositionEffect_Close)
+        # 没有初始化的话，就先初始化，将要买入的目标记录到列表中，待下次tick激活处理
+        if str_symbol not in self.context.pre_quick_sell_dict.keys():
+            self.context.pre_quick_sell_dict[str_symbol] = TargetInfo()
 
     def run(self):
         #主动停止线程while not self._stop_event.is_set():
