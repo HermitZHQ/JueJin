@@ -27,8 +27,8 @@ class DownloadHistoryC():
         self.context = context
         self.str_strategy = 'AllHistoryInfo'
         self.str_load_ids_strategy = 'VDebug'
-        self.save_history_path = 'c:\\TradeLogs\\' + self.str_strategy
-        self.load_history_path = 'c:\\TradeLogs\\' + self.str_strategy + '.npy'
+        self.save_history_path = 'c:\\TradeLogs\\' + self.str_strategy + " " + str(self.get_todat_date()) #加上日期，方便后面查找调用
+        self.load_history_path = 'c:\\TradeLogs\\' + self.str_strategy + " " + str(self.get_todat_date()) + '.npy' #加上日期，方便后面查找调用
         self.ids_path_a1 = 'c:\\TradeLogs\\IDs-' + self.str_load_ids_strategy + '-A1.txt'
 
         self.subscription_stock_arr = []
@@ -181,6 +181,8 @@ class DownloadHistoryC():
             self.his_data_dic[temp_history_dic_index] = temp_item
             temp_history_dic_index += 1
 
+        print(f"25 stock arr length:{len(self.his_25_amount_data_arr)}")
+        print(f"not in 25 stock arr length:{len(self.notin_25_stock_arr)}")
         print(f"his_data length::{len(self.his_data_dic)}")
 
     def load_ids(self, context):
