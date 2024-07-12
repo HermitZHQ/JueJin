@@ -26,7 +26,7 @@ class DownloadHistoryC():
 
         self.context = context
         self.str_strategy = 'AllHistoryInfo'
-        self.str_load_ids_strategy = 'VDebug'
+        self.str_load_ids_strategy = 'V'
         self.save_history_path = 'c:\\TradeLogs\\' + self.str_strategy + " " + str(self.get_todat_date()) #加上日期，方便后面查找调用
         self.load_history_path = 'c:\\TradeLogs\\' + self.str_strategy + " " + str(self.get_todat_date()) + '.npy' #加上日期，方便后面查找调用
         self.ids_path_a1 = 'c:\\TradeLogs\\IDs-' + self.str_load_ids_strategy + '-A1.txt'
