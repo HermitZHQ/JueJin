@@ -76,8 +76,8 @@ class BuyMode:
 class OrderTypeBuy:
     def __init__(self):
         # 选择整体的订单交易模式，限价或者市价，只能激活一种！！
-        self.Limit = 0
-        self.Market = 1
+        self.Limit = 1
+        self.Market = 0
 
 class OrderTypeSell:
     def __init__(self):
