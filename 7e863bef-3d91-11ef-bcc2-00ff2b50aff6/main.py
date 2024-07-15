@@ -45,7 +45,7 @@ class DownloadHistoryC():
         today = datetime.now().date()
 
         # 获取前一天的日期  - timedelta(days=1)
-        previous_day = today - timedelta(days=1)
+        previous_day = today
 
         # 获取前一天的星期几（0是星期一，6是星期天）
         weekday = previous_day.weekday()
@@ -69,8 +69,8 @@ class DownloadHistoryC():
         #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉
         # s_time = test_s_time
         # e_time = test_e_time
-        #历史数据中，集合进价时间
-        s_25_hisroty_time = str(yesterday_date) + ' 09:25:00'
+        #历史数据中，集合进价时间，25分整，无法拿到历史进价，要提前几秒
+        s_25_hisroty_time = str(yesterday_date) + ' 09:24:57'
         e_25_hisroty_time = str(yesterday_date) + ' 09:25:00'
 
         print(f"{s_time} To {e_time}")
@@ -80,6 +80,8 @@ class DownloadHistoryC():
         temp_ids_str = ''
         temp_index = 0
         temp_history_dic_index = 0
+        had_complete_count = 0
+        all_stock_length = len(self.context.subscription_stock_arr)
 
         #这里我们用一个临时集合来接取数据，再将临时集合中的数据添加到his_data中
         temp_his_data = []
@@ -95,7 +97,9 @@ class DownloadHistoryC():
                 #当达到批次的数量时，开始获得历史数据
                 if temp_index == self.SECTION_HISTORY_STOCK_COUNT:
                     temp_his_data = history(symbol=temp_ids_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
-                    print(f"temp_his_data length::{len(temp_his_data)}")
+
+                    had_complete_count += temp_index
+                    print(f"temp_his_data length::{len(temp_his_data)}||{round(float(had_complete_count/all_stock_length)*100, 2)}")
 
                     temp_his_25_amount_data = history(symbol=temp_ids_str, frequency='tick', start_time=s_25_hisroty_time,  end_time=e_25_hisroty_time, fields='symbol, last_amount, created_at', skip_suspended=False, fill_missing='NaN', adjust=ADJUST_PREV, df=False)
 
@@ -126,7 +130,9 @@ class DownloadHistoryC():
         #这里应该可以直接判断，直接拿取到his_data里，节省一个for循环时间，但以后这种情况可能会比较少，所以暂时也就无所谓了！
         if temp_ids_str != '':
             temp_his_data = history(symbol=temp_ids_str, frequency='60s', start_time=s_time,  end_time=e_time, fields='symbol, amount, eob, name', adjust=ADJUST_PREV, df=False)
-            print(f"temp_his_data length::{len(temp_his_data)}")
+
+            had_complete_count += temp_index
+            print(f"temp_his_data length::{len(temp_his_data)}||{round(float(had_complete_count/all_stock_length)*100, 2)}")
 
             temp_his_25_amount_data = history(symbol=temp_ids_str, frequency='tick', start_time=s_25_hisroty_time,  end_time=e_25_hisroty_time, fields='symbol, last_amount, created_at', skip_suspended=False, fill_missing='NaN', adjust=ADJUST_PREV, df=False)
 
