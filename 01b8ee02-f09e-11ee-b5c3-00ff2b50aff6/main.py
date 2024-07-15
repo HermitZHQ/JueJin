@@ -27,6 +27,8 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
+self_server_port = 12346 #正式服12345, 调试服12346
+
 SECTION_HISTORY_STOCK_COUNT = 50
 HISTORY_DATA_SEND_COUNT = 50
 HISTORY_TODAY_DATA_SEND_COUNT = 50
@@ -104,6 +106,11 @@ class StrategyInfo:
 
         self.slip_step = 5 # 滑点级别，1-5，要突破5的话，可以自己算？
 
+class IsShowPrint:
+    def __init__(self):
+        self.is_show_tick_print = True
+      
+
 # 策略中必须有init方法
 def init(context):
     context.LENGTH_FORMAT = 'I'
@@ -125,6 +132,7 @@ def init(context):
     context.his_symbol_data_arr = set()
     context.his_data_dic = {}
     context.all_his_data_dic = {} # 所有标的历史数据，其中也包含未在列表中的标的，key--symbol, value--list(包含当日所有历史数据的list)
+    context.all_his_data_with_min_dic = {} # 所有标的历史数据，只包含在列表的标的，key--symbol，value--dic(dic::key--min, value--min_data)(每分钟所对应的历史数据)
     context.his_today_data_dic = {}
     context.cur_data_dic = {}
     context.cur_data_second_dic = {}
@@ -168,6 +176,8 @@ def init(context):
     context.test_second_data_time = ''
     context.test_next_second_data_time = ''
 
+    context.is_show_print = IsShowPrint()
+
     #订阅上证指数用于在on_tick里刷新    1
     subscribe(symbols='SHSE.000001', frequency='tick', count=1, unsubscribe_previous=False)
 
@@ -180,11 +190,14 @@ def init(context):
     load_mac_address(context)
 
     # 线程Server 正式服12345, 调试服12346   3
-    main_server_thread = MainServerTreadC("0.0.0.0", 12346, context)
+    main_server_thread = MainServerTreadC("0.0.0.0", self_server_port, context)
     main_server_thread.start()
 
     # 关盘后，模拟on_bar用
     # init_client_one_time(context)
+
+    #测试新版-服务器运算
+    init_client_stork(context)
     
     #测试获得当日历史数据
     # load_ids(context)
@@ -538,6 +551,84 @@ def init_client_one_time(context):
             # 关盘后，模拟on_bar用,用这个
             # simulation_on_bar(context)
 
+# 这里开始大改，将改为服务器运算
+def init_client_stork(context):
+
+    if context.is_subscribe == False:
+
+        subscribe_method(context)
+
+        # test_get_data(context)
+
+        #这个一定要放在subscribe_method(context),不然获取不了需要订阅的标的
+        load_history_from_file(context)
+
+        context.is_subscribe = True
+
+        context.is_can_show_print = False
+
+    if_complete = 0
+
+    while if_complete == 0:
+
+        if context.init_client_socket_dic:
+
+                client_socket = ""
+
+                for val in context.init_client_socket_dic.values():
+
+                    if val.is_initing == False and val.is_init == False:
+
+                        val.is_initing = True
+
+                        client_socket = val.client_socket
+
+                        #OP_ID_S2C_STOCK_NAME_SEND
+                        #这里先将名字传输过去
+                        #===================================
+                        #1-4 OP_ID_S2C_STOCK_NAME_SEND
+                        ready_send_name_bytes = OP_ID_S2C_STOCK_NAME_SEND.to_bytes(4, byteorder="big")
+                        #2-4 int32 标的名称总数量
+                        stock_name_count = len(context.temp_matching_dic)
+                        ready_send_name_bytes += stock_name_count.to_bytes(4, byteorder="big")
+
+                        client_socket.sendall(ready_send_name_bytes)
+
+                        for key, valume in context.temp_matching_dic.items():
+                            ready_send_name_str = key + "+" + valume
+                            send_data = ready_send_name_str.encode('utf-8')
+                            send_length = len(send_data).to_bytes(4, byteorder='big')
+                            client_socket.sendall(send_length)
+                            print(f"{ready_send_name_str}")
+                            client_socket.sendall(send_data)
+
+
+                        #==========================================
+                        val.is_init = True
+                        val.is_initing = False
+
+                        if_complete = 1
+
+                        context.is_can_show_print = True
+
+
+        #当初始化完成后，删掉存在初始化字典里的对象
+        if if_complete == 1:
+            del_init_member = None
+
+            for key, valume in context.init_client_socket_dic.items():
+                if valume.is_init == True:
+                    del_init_member = key
+                    break
+
+            # 不能在这里删除dict的item，因为你外面那层正在遍历中，先记录下来，出这个函数后再删
+            context.delete_client_socket_arr.append(del_init_member)
+
+            # 关盘后，模拟on_bar用,用这个
+            # simulation_on_bar(context)
+
+
+
 
 #由于tick中内容代码过多，尝试将各部分代码进行封装!!!
 
@@ -643,7 +734,10 @@ def init_client_method(context):
         for key, valume in context.init_client_socket_dic.items():
 
             if valume.is_init == False and valume.is_initing == False and valume.check_mac_flag == True:
-                init_client_one_time(context)
+                #旧版
+                # init_client_one_time(context)
+                #新版
+                init_client_stork(context)
         # 在这里检测是否需要删除，需要的话，从这儿删除
         if len(context.delete_client_socket_arr) > 0:
             for key in context.delete_client_socket_arr:
@@ -803,9 +897,15 @@ def test_1min_lose_data(context, tick):
         print(f"current::{tick['symbol']}::{tick['last_amount']}::{str(tick['created_at'])}")
         send_message_second_method(v, context)
 
+#__tick__对比历史数据，做出相应计算
+def calculate_percent(context, tick):
+
+    pass
 
 
 def on_tick(context, tick):
+
+    # return
 
     # 更新对应标的的一些保存信息------------------------------------------------
     update_ids_info_method(context, tick)
@@ -835,18 +935,27 @@ def on_tick(context, tick):
                     if context.client_init_complete_dic[v] == True:
 
                         #当客户端初始化完成后，向客户端发送第一次数据
-                        send_data_in_first(context, v)
+                        #    1
+                        # send_data_in_first(context, v)
 
                         #由于在tick里，server与client的传输结构模式，这里需要补发一次当前tick来的数据
                         context.cur_data_dic.clear() 
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
-                        send_message_second_method(v, context)
+
+                        #   2
+                        # send_message_second_method(v, context)
+
+                        # 新版
+                        if context.is_show_print.is_show_tick_print == True:
+                            print(f"{tick['symbol']}:{tick['last_amount']}:{str(tick['created_at'])}")
 
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
                         #这里发现，00秒的数据有可能会重复，这里需要遍历一下ready_second_for_send里 是否已经有00秒数据，如果有 就不进行存入
                         #这里有点问题，可能会有重复数据出现，后面记得来改!!!
-                        storage_data_when_client_init(context)
+                        #     3
+                        # storage_data_when_client_init(context)
+                        pass
                         
 
 #on_bar未使用，暂时保留
@@ -946,7 +1055,7 @@ def load_history_from_file(context):
 
     #这里需要改下，改为dic类型，一个symbol对应其相应历史数据list
     #这样为了后续方便遍历已订阅的历史数据并发送给客户端，而不是发送全部历史数据(包含位订阅的)
-    #key--symbol, value--list   context.all_his_data_dic    
+    #key--symbol, value--list   context.all_his_data_dic, 新版本，这里后面可能会用到，当特别关注的标的，就会需要发送全天历史数据!    
     for val_data in context.his_data.values():
         if val_data['symbol'] not in context.all_his_data_dic.keys():
             temp_list = []
@@ -954,6 +1063,16 @@ def load_history_from_file(context):
 
     for value in context.his_data.values():
         context.all_his_data_dic[value['symbol']].append(value)
+
+    #新版本，因为要在服务器上进行数据运算,将历史数据都添加到dic中，dic类型, 一个symbol对应一个dic
+    #key--symbol, value--dic(dic::key--time, value--data)
+    #context.subscription_stock_arr
+    #context.all_his_data_with_min_dic
+    for symbol_id in context.subscription_stock_arr:
+        if symbol_id in context.all_his_data_dic.keys():
+            for min_data in context.all_his_data_dic[symbol_id]:
+                print(f"{min_data}")
+
 
     # for key, value in context.all_his_data_dic.items():
     #     print(f"{key}:{len(value)}")
@@ -1898,7 +2017,10 @@ class ReciveClientThreadC(threading.Thread):
                         print(f"this is heartbeat")
                     #未注册的MAC地址，直接关闭socket以及接收thread
                     else:
-                        print(f"this is no recognition MAC, close socket!!!")
+                        print(f"{self.client_socket}:this is no recognition MAC, close socket!!!")
+                        # 非注册客户端，连接上来后引发报错问题，从这里直接删除，未验证是否还会引发报错
+                        self.context.delete_client_socket_arr.append(self.client_socket)
+                        del self.context.client_init_complete_dic[self.client_socket]
                         self.client_socket.close()
                         self.stop()
 

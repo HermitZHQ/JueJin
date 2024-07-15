@@ -64,6 +64,7 @@ class TestClientUI(QMainWindow):
     has_new_data_single = pyqtSignal(bool)
     has_today_history_update_single = pyqtSignal(bool)
     has_init_window_single = pyqtSignal(bool)
+    has_init_stock_name_single = pyqtSignal(bool)
 
     def __init__(self):  
         super().__init__()  
@@ -120,9 +121,11 @@ class TestClientUI(QMainWindow):
         self.is_has_today_history_data = False
         self.is_in_updating = False
         self.is_complate_all_init = False
-        self.is_init_window = False
-        self.is_w2_refresh = True #控制每分钟数据是否显示
-        self.is_w6_refresh = True #控制当日所有数据是否显示
+        self.is_init_window = False #信号，初始UI相关容器
+        self.is_init_window_stork_name = False #新版，信号，初始化标的代码，名称，以及相关w1--6相关容器
+        self.is_w2_refresh = False #控制每分钟数据是否显示
+        self.is_w6_refresh = False #控制当日所有数据是否显示
+        self.server_port = 12346 #正式服12345, 调试服12346
 
         self.test_index = 0
 
@@ -140,6 +143,7 @@ class TestClientUI(QMainWindow):
         self.has_new_data_single.connect(self.update_label_for_single)
         self.has_today_history_update_single.connect(self.init_today_history_for_single)
         self.has_init_window_single.connect(self.init_window)
+        self.has_init_stock_name_single.connect(self.init_window_stork_name)
 
         # self.load_history_info()
 
@@ -157,7 +161,7 @@ class TestClientUI(QMainWindow):
 
     def connect_server(self):
         #"8.137.48.212" - 127.0.0.1 # 线程Server 正式服12345, 调试服12346
-        self.send_data_to_server("8.137.48.212", 12346, {"name": "Alice", "message": "Hello, server!"})
+        self.send_data_to_server("8.137.48.212", self.server_port, {"name": "Alice", "message": "Hello, server!"})
  
     def send_data_to_server(self, server_ip, server_port, data):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -490,6 +494,71 @@ class TestClientUI(QMainWindow):
         self.thread.finished.connect(self.update_label)#self.update_label
         self.thread.start()  
 
+
+    # 只初始化标的代码,名称,及相关w1-6中的各个容器
+    def init_window_stork_name(self):
+        #初始化标的代码
+        for item in self.symbol_arr:
+            #初始化标的代码与名称刷新容器内容
+            temp_qwidget = QWidget()
+            temp_qwidget.setObjectName(item)
+            temp_qwidget_layout = QHBoxLayout(temp_qwidget)
+            temp_qwidget.setFixedWidth(self.MAX_H_SIZE * 3)
+            temp_qwidget.setFixedHeight(self.MAX_V_SIZE)
+
+            self.w1.bottom_update_widget_layout.addWidget(temp_qwidget)
+
+            stock = QLabel(f'{item}', temp_qwidget)  
+            stock.setMinimumWidth(self.MAX_H_SIZE)
+            temp_qwidget_layout.addWidget(stock)
+
+            self.w1.stock_widget_dic[item] = LabelOrderInfo(item, temp_qwidget, temp_qwidget_layout)
+            # self.w1.stock_widget_dic[item].widget.setObjectName(item)
+
+            self.init_update_area_widget(item, self.w2)
+            self.init_update_area_widget(item, self.w3)
+            self.init_update_area_widget(item, self.w4)
+            self.init_update_area_widget(item, self.w5)
+            self.init_update_area_widget(item, self.w6)
+
+            temp_list = []
+            self.agility_data_dic[item] = temp_list
+
+            self.order_widget_dic[item] = 0
+
+            print(f"{item}")
+
+            self.simple_stock_with_stock[item[-6:]] = item
+
+            #初始化所有标的的w6今日所有成交额的cunrrent_label，避免后面再刷新中创建
+            # 新版本，这里后面可能会用到，先注释掉
+            # temp_all_day_history_amount = 0.0
+            # for key, valume in self.history_all_dic[item].items():
+            #     temp_all_day_history_amount += float(valume.amount)
+
+            # data_label = self.create_current_label('ALL DAY', temp_all_day_history_amount, '0.0', '0.0', self.w6.stock_widget_dic[item].widget)
+
+            # self.w6.stock_widget_dic[item].layout.addWidget(data_label)
+            # self.w6.label_with_time_dic[item].append(data_label)
+
+            # temp_current_label_info = CurrentLabelInfo(data_label, 'ALL DAY', 0.0, temp_all_day_history_amount)
+            # self.w6.stock_current_label_dic[item] = temp_current_label_info
+            #================================ w6
+
+        #初始化名称
+        for key, valume in self.w1.stock_widget_dic.items():
+                
+            name = QLabel(f'{self.name_dic[key]}', temp_qwidget)  
+            name.setMinimumWidth(self.MAX_H_SIZE)
+            valume.layout.addWidget(name)
+
+
+        #初始化完成后，向服务器发送已完成消息
+        self.send_to_server_client_init_complete(self.server_sokcet)
+        print(f"send message to server init client had complate")
+
+
+    # 初始化窗口
     def init_window(self):
         if len(self.symbol_arr) != 0:
                 
@@ -583,17 +652,7 @@ class TestClientUI(QMainWindow):
 
                     print(f"{item}")
 
-                    # print(f"{item[-6:]}")
-
                     self.simple_stock_with_stock[item[-6:]] = item
-
-
-                    #获得当前时间
-                    # temp_translate_time = datetime.strptime(temp_joint_current_time, "%H:%M:%S").time()
-                    # now = datetime.now()  
-                    # combined = datetime.combine(now.date(), temp_translate_time)
-                    # one_minute_later = combined + timedelta(minutes=1) 
-                    # temp_joint_history_time = one_minute_later.strftime("%H:%M:%S")
 
                     #这里要遍历所有标的的所有历史数据，抓出哪一分钟没有数据，并重新添加空的数据进去
                     #不要在刷新过程中来判断，尽量减少刷新负担。。吧。。
@@ -601,13 +660,6 @@ class TestClientUI(QMainWindow):
                         if hhmmss not in self.history_all_dic[item].keys():
                             temp_his_date = AnalysisHistoryData(item, 0, hhmmss, 'temp')
                             self.history_all_dic[item][hhmmss] = temp_his_date
-
-                        #补全当日的里数据，因为在single函数里的格式问题，所以要+08:00
-                        #这里需要补全到当前分钟数
-                        # if hhmmss not in self.history_today_all_dic[item].keys():
-                        #     temp_hhmmss ='xxxx-xx-xx ' + hhmmss + '+08:00'
-                        #     temp_his_today_data = AnalysisHistoryData(item, 0, temp_hhmmss, 'temp')
-                        #     self.history_today_all_dic[item][hhmmss] = temp_his_today_data
 
                     #初始化所有标的的w6今日所有成交额的cunrrent_label，避免后面再刷新中创建
                     temp_all_day_history_amount = 0.0
@@ -1599,309 +1651,277 @@ class ReciveQThread(QThread):
                 #持续更新实时数据,此100暂时不使用
                 #这里更改为二进制接收标的名称       100
                 if operation_id == OP_ID_S2C_STOCK_NAME_SEND:
-
-                    name_count_bytes = self.client_socket.recv(4)
-                    name_count = int.from_bytes(name_count_bytes, byteorder='big')
-
-                    #这里报错，暂时不太清，将这里改成字符串接收
-                    #symbol_and_name_recive.decode('utf-8'),这里改为utf-8后暂时没发现报错，但还需要观察!!
-                    name_index = 0
-                    for i in range(name_count):
-                        # symbol_letter_bytes = self.client_socket.recv(4)
-                        # symbol_num_bytes = self.client_socket.recv(4)
-                        # symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
-
-                        # symbol_name_length_bytes = self.client_socket.recv(2)
-                        # symbol_name_length = int.from_bytes(symbol_name_length_bytes, byteorder='little')
-
-                        # symbol_name_bytes = self.client_socket.recv(1024)#symbol_name_length
-                        # name = symbol_name_bytes.decode('utf-8')
-
-                        #==========================================
-
-                        symbol_and_name_length_bytes = self.client_socket.recv(4)
-                        symbol_and_name_length = int.from_bytes(symbol_and_name_length_bytes, byteorder='big')
-
-                        symbol_and_name_recive = self.client_socket.recv(symbol_and_name_length)
-                        symbol_and_name = symbol_and_name_recive.decode('utf-8')
-                        symbol_name_arr = symbol_and_name.split("+")
-
-                        name_index += 1
-                        print(f"{symbol_name_arr[0]}:{symbol_name_arr[1]}|{name_index}")
-
-                        main_window.name_dic[symbol_name_arr[0]] = symbol_name_arr[1]
-
-                    #====================
-                    # single_data = self.client_socket.recv(4)
-                    # current_data_len = int.from_bytes(single_data, byteorder='big')
-                    # print(f"cur_data_len:{current_data_len}")
-
-                    # json_his_data = self.client_socket.recv(current_data_len)
-                    # current_data = json.loads(json_his_data.decode('utf-8'))  
-
-                    # main_window.temp_current_data_dic.clear()
-                    # main_window.temp_current_data_dic = {key : AnalysisCurrentData.from_dict(value) for key, value in current_data.items()}
-
-                    # for key, valume in main_window.temp_current_data_dic.items():
-                    #     main_window.temp_symbol_arr.append(valume.symbol)
-                    #     main_window.current_data_dic[key] = valume
-                    #     print(f"++++++++++++++++++++++++++++++++++++++++++++++{len(main_window.temp_symbol_arr)}")
-
-                    # if len(main_window.temp_symbol_arr) == len(main_window.symbol_arr):
-                    #     main_window.teat_thread_2()
-
-                    # print(f"{main_window.current_data_dic}")
-                    #====================
+                    self.receive_100()
 
                 #初始化窗口     101
                 elif operation_id == OP_ID_S2C_HISTORY_DATA_SEND:
-                    
-                    temp_history_data_list = []
-
-                    # 2-4 int32
-                    history_data_count_bytes = self.client_socket.recv(4)
-                    history_data_count = int.from_bytes(history_data_count_bytes, byteorder='big')
-                    print(f"history_data_count::{history_data_count}")
-
-                    had_recive_count = 0
-
-                    #这个接收循环是有问题的，应该不是这样接收的
-                    for i in range(history_data_count):
-                        history_recive_count_bytes = self.client_socket.recv(4)
-                        history_recive_count = int.from_bytes(history_recive_count_bytes, byteorder='big')
-
-                        for n in range(history_recive_count):
-                            symbol_letter_bytes = self.client_socket.recv(4)
-                            symbol_num_bytes = self.client_socket.recv(4)
-                            symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
-
-                            amount_bytes = self.client_socket.recv(4)
-                            amount = self.translate_amount_in_bytes(amount_bytes)
-
-                            eob_date_bytes = self.client_socket.recv(4)
-                            eob_time_bytes = self.client_socket.recv(4)
-                            eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
-
-                            # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
-
-                            if symbol in main_window.name_dic.keys():
-                                temp_history_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
-
-                        had_recive_count += history_recive_count
-                        if had_recive_count == history_data_count:
-                            break
-
-                    shdf_dic = {}
-                    #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
-                    t_i = 0
-                    for item in temp_history_data_list:
-                        shdf_dic[t_i] = item
-                        t_i += 1
-
-                    print(f"shdf_dic::@{len(shdf_dic)}")
-
-                    for key, value in shdf_dic.items():
-                        # print(f"{key}")
-                        if value.symbol not in main_window.history_all_dic.keys():
-                           
-                            #遍历出标的代码，单独装进一个字典中
-                            main_window.symbol_arr.append(value.symbol)
-                            #上面100里面已经装填了，测试没问题就删了
-                            # main_window.name_dic[value.symbol] = value.name
-
-                            temp_history_time_arr = value.eob.split(" ")
-                            temp_h_hour_arr = temp_history_time_arr[1].split("+")
-
-                            temp_dic = {}
-                            shdf_dic[key].eob = temp_h_hour_arr[0]
-                            temp_dic[temp_h_hour_arr[0]] = value
-
-                            main_window.history_all_dic[value.symbol] = temp_dic
-
-                        else:
-                            #这里遍历出每一个标的代码对应的历史数据，数据类型是 一个key对应一个dic
-
-                            temp_history_time_arr = value.eob.split(" ")
-                            temp_h_hour_arr = temp_history_time_arr[1].split("+")
-
-                            shdf_dic[key].eob = temp_h_hour_arr[0]
-                            main_window.history_all_dic[value.symbol][temp_h_hour_arr[0]] = value
-
-                        # print(f"{value}")
-
-                    #注意！！这里socket如果出问题，也搬到104最后面去
-                    main_window.server_sokcet = self.client_socket
-
-                    #放在104最后面试试
-                    # main_window.is_init_window = True
-                    # main_window.has_init_window_single.emit(main_window.is_init_window)
+                    self.init_ui_101()
 
                 #持续更新实时数据,以秒为单位    102
                 elif operation_id == OP_ID_S2C_REAL_TIME_DATA_SEND:
-
-                    #将解析symbol, amount, eob，分别封装到方法里，方便其他地方调用
-
-                    #2-4 int32
-                    symbol_letter_bytes = self.client_socket.recv(4)
-                    symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
-                    symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
-                    # print(f"symbol_letter:{symbol_letter}")
-
-                    #3-4 int32
-                    symbol_num_bytes = self.client_socket.recv(4)
-                    symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
-                    #___这里需要补全标的代码前面的0
-                    if len(symbol_num) < 6:
-                        need_complement = 6 - len(symbol_num)
-                        for i in range(need_complement):
-                            i += 1
-                            symbol_num = '0' + symbol_num
-                    # print(f"symbol_num:{symbol_num}")
-
-                    #4-4 int32
-                    amount_bytes = self.client_socket.recv(4)
-                    amount = str(round(float(int.from_bytes(amount_bytes, byteorder='big')), 2))
-                    # print(f"amount:{amount}")
-
-                    #5-4 int32
-                    eob_date_bytes = self.client_socket.recv(4)
-                    eob_date_str = str(int.from_bytes(eob_date_bytes, byteorder='big'))
-                    eob_date = self.re_complement_date(eob_date_str)
-                    # print(f"eob_date:{eob_date}")
-
-                    #6-4 int32
-                    eob_time_bytes = self.client_socket.recv(4)
-                    eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
-                    eob_time = self.re_complement_time(eob_time_str)
-                    # print(f"eob_time:{eob_time}")
-
-                    symbol = symbol_letter + '.' + symbol_num
-                    eob = eob_date + " " + eob_time
-
-                    temp_current_data = AnalysisSecondData(symbol, amount, eob)
-
-                    #======================list方式,等待刷新
-                    #现在需要无论什么时候开启客户端，都有前面的数据
-                    #这里现在需要设置一个bool，当客户端还在初始化时候，就需要接收数据
-                    #以免再初始化的时候，漏掉1s左右的数据
-
-                    main_window.temp_wait_for_update_list.append(temp_current_data)
-
-                    #当数据来时，UI还在更新，则添加先添加到等待集合里
-                    if main_window.is_in_updating == False:
-
-                        #将临时存放等待刷新的数据集合给准备刷新的集合
-                        for item in main_window.temp_wait_for_update_list:
-                            temp_item = item
-                            main_window.wait_for_update_list.append(temp_item)    
-
-                            #str转换int,需要先将其转化为float,再转化为int
-                            if int(float(temp_item.amount)) != 0:
-                                print(f"put in update list::{temp_item.symbol}||{temp_item.amount}||{temp_item.eob}")
-
-                        #清空临时list,准备接新的数据
-                        main_window.temp_wait_for_update_list.clear()
-
-                        main_window.test_index = 0
-
-                        main_window.is_in_updating = True
-
-                        main_window.is_has_new_data = True
-                        main_window.has_new_data_single.emit(main_window.is_has_new_data)
-                        main_window.is_has_new_data = False
+                    self.real_time_refresh_data()
 
                 #当客户端未及时开启，需要初始化此时段之前的所有数据     104
                 elif operation_id == OP_ID_S2C_HISTORY_TODAY_DATA_SEND:
-
-                    temp_history_today_data_list = []
-
-                    # 2-4 int32
-                    history_today_data_count_bytes = self.client_socket.recv(4)
-                    history_today_data_count = int.from_bytes(history_today_data_count_bytes, byteorder='big')
-                    print(f"history_data_count::{history_today_data_count}")
-
-                    had_recive_count = 0
-
-                    #这个接收循环是有问题的，应该不是这样接收的
-                    for i in range(history_today_data_count):
-                        history_today_recive_count_bytes = self.client_socket.recv(4)
-                        history_today_recive_count = int.from_bytes(history_today_recive_count_bytes, byteorder='big')
-
-                        for n in range(history_today_recive_count):
-                            symbol_letter_bytes = self.client_socket.recv(4)
-                            symbol_num_bytes = self.client_socket.recv(4)
-                            symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
-
-                            amount_bytes = self.client_socket.recv(4)
-                            amount = self.translate_amount_in_bytes(amount_bytes)
-
-                            eob_date_bytes = self.client_socket.recv(4)
-                            eob_time_bytes = self.client_socket.recv(4)
-                            eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
-
-                            # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
-                            temp_history_today_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
-
-                        had_recive_count += history_today_recive_count
-                        if had_recive_count == history_today_data_count:
-                            break
+                    self.init_ui_104()
 
 
-                    # return
+    # 封装 OP_ID_S2C_REAL_TIME_DATA_SEND--102, 实时数据刷新
+    def real_time_refresh_data(self):
+        #将解析symbol, amount, eob，分别封装到方法里，方便其他地方调用
 
-                    # single_data = self.client_socket.recv(4)
-                    # his_today_data_len = int.from_bytes(single_data, byteorder='big')
-                    # print(f"his_today_data_len:{his_today_data_len}")
+        #2-4 int32
+        symbol_letter_bytes = self.client_socket.recv(4)
+        symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+        symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+        # print(f"symbol_letter:{symbol_letter}")
 
-                    #改为分段接收===================================
-                    # remaining = his_today_data_len  
-                    # while remaining > 0:  
+        #3-4 int32
+        symbol_num_bytes = self.client_socket.recv(4)
+        symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+        #___这里需要补全标的代码前面的0
+        if len(symbol_num) < 6:
+            need_complement = 6 - len(symbol_num)
+            for i in range(need_complement):
+                i += 1
+                symbol_num = '0' + symbol_num
+        # print(f"symbol_num:{symbol_num}")
 
-                    #     chunk = self.client_socket.recv(min(remaining, 1024))  # 最多接收1024字节  
-                        
-                    #     if not chunk:  
-                    #         break  # 如果连接关闭或没有数据，则退出循环  
+        #4-4 int32
+        amount_bytes = self.client_socket.recv(4)
+        amount = str(round(float(int.from_bytes(amount_bytes, byteorder='big')), 2))
+        # print(f"amount:{amount}")
 
-                    #     self.recive_today_history_data += chunk.decode()
-                    #     remaining -= len(chunk)  
+        #5-4 int32
+        eob_date_bytes = self.client_socket.recv(4)
+        eob_date_str = str(int.from_bytes(eob_date_bytes, byteorder='big'))
+        eob_date = self.re_complement_date(eob_date_str)
+        # print(f"eob_date:{eob_date}")
 
-                    # print(f"self.recive_today_history_data length::{len(self.recive_today_history_data)} ")
-                    #===============================================
+        #6-4 int32
+        eob_time_bytes = self.client_socket.recv(4)
+        eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
+        eob_time = self.re_complement_time(eob_time_str)
+        # print(f"eob_time:{eob_time}")
 
-                    # his_today_data = json.loads(self.recive_today_history_data.encode('utf-8')) 
+        symbol = symbol_letter + '.' + symbol_num
+        eob = eob_date + " " + eob_time
 
-                    # thtd_dic = {key : AnalysisHistoryData.from_dict(value) for key, value in his_today_data.items()}
+        temp_current_data = AnalysisSecondData(symbol, amount, eob)
 
-                    thtd_dic = {}
-                    #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
-                    t_i = 0
-                    for item in temp_history_today_data_list:
-                        thtd_dic[t_i] = item
-                        t_i += 1
+        #======================list方式,等待刷新
+        #现在需要无论什么时候开启客户端，都有前面的数据
+        #这里现在需要设置一个bool，当客户端还在初始化时候，就需要接收数据
+        #以免再初始化的时候，漏掉1s左右的数据
 
-                    print(f"thtd_dic::@{len(thtd_dic)}")
+        main_window.temp_wait_for_update_list.append(temp_current_data)
 
-                    for key, value in thtd_dic.items():
-                    #    print(f"value.eob::{value.eob}")
-                       if value.symbol not in main_window.history_today_all_dic.keys():
-                           
-                            temp_dic = {}
+        #当数据来时，UI还在更新，则添加先添加到等待集合里
+        if main_window.is_in_updating == False:
 
-                            thtd_dic[key].eob = value.eob
-                            temp_dic[value.eob] = value
+            #将临时存放等待刷新的数据集合给准备刷新的集合
+            for item in main_window.temp_wait_for_update_list:
+                temp_item = item
+                main_window.wait_for_update_list.append(temp_item)    
 
-                            main_window.history_today_all_dic[value.symbol] = temp_dic
+                #str转换int,需要先将其转化为float,再转化为int
+                if int(float(temp_item.amount)) != 0:
+                    print(f"put in update list::{temp_item.symbol}||{temp_item.amount}||{temp_item.eob}")
 
-                       else:
-                            #这里遍历出每一个标的代码对应的此刻时段之前的所有历史数据，数据类型是 一个key对应一个dic
-                            thtd_dic[key].eob = value.eob #shdf_dic
-                            main_window.history_today_all_dic[value.symbol][value.eob] = value
+            #清空临时list,准备接新的数据
+            main_window.temp_wait_for_update_list.clear()
 
-                    #注意，客户端实在接受完昨日历史数据，就开始进行初始化UI，可能会发生，这里还在接收，UI就在初始化，后面可能会出问题
-                    #如果出问题，就把101里的初始化UI搬这里来
-                    #牛逼，真出问题了，搬这里来试试!!
-                    main_window.is_init_window = True
-                    main_window.has_init_window_single.emit(main_window.is_init_window)
+            main_window.test_index = 0
+
+            main_window.is_in_updating = True
+
+            main_window.is_has_new_data = True
+            main_window.has_new_data_single.emit(main_window.is_has_new_data)
+            main_window.is_has_new_data = False
+
+
+    # 封装 OP_ID_S2C_HISTORY_TODAY_DATA_SEND--104， 初始化中途开启时间段之前所有当日数据
+    def init_ui_104(self):
+        temp_history_today_data_list = []
+
+        # 2-4 int32
+        history_today_data_count_bytes = self.client_socket.recv(4)
+        history_today_data_count = int.from_bytes(history_today_data_count_bytes, byteorder='big')
+        print(f"history_data_count::{history_today_data_count}")
+
+        had_recive_count = 0
+
+        #这个接收循环是有问题的，应该不是这样接收的
+        for i in range(history_today_data_count):
+            history_today_recive_count_bytes = self.client_socket.recv(4)
+            history_today_recive_count = int.from_bytes(history_today_recive_count_bytes, byteorder='big')
+
+            for n in range(history_today_recive_count):
+                symbol_letter_bytes = self.client_socket.recv(4)
+                symbol_num_bytes = self.client_socket.recv(4)
+                symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
+
+                amount_bytes = self.client_socket.recv(4)
+                amount = self.translate_amount_in_bytes(amount_bytes)
+
+                eob_date_bytes = self.client_socket.recv(4)
+                eob_time_bytes = self.client_socket.recv(4)
+                eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
+
+                # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
+                temp_history_today_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
+
+            had_recive_count += history_today_recive_count
+            if had_recive_count == history_today_data_count:
+                break
+
+        thtd_dic = {}
+        #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
+        t_i = 0
+        for item in temp_history_today_data_list:
+            thtd_dic[t_i] = item
+            t_i += 1
+
+        print(f"thtd_dic::@{len(thtd_dic)}")
+
+        for key, value in thtd_dic.items():
+        #    print(f"value.eob::{value.eob}")
+            if value.symbol not in main_window.history_today_all_dic.keys():
+                
+                temp_dic = {}
+
+                thtd_dic[key].eob = value.eob
+                temp_dic[value.eob] = value
+
+                main_window.history_today_all_dic[value.symbol] = temp_dic
+
+            else:
+                #这里遍历出每一个标的代码对应的此刻时段之前的所有历史数据，数据类型是 一个key对应一个dic
+                thtd_dic[key].eob = value.eob #shdf_dic
+                main_window.history_today_all_dic[value.symbol][value.eob] = value
+
+        #注意，客户端实在接受完昨日历史数据，就开始进行初始化UI，可能会发生，这里还在接收，UI就在初始化，后面可能会出问题
+        #如果出问题，就把101里的初始化UI搬这里来
+        #牛逼，真出问题了，搬这里来试试!!
+        main_window.is_init_window = True
+        main_window.has_init_window_single.emit(main_window.is_init_window)
+
+    # 封装 OP_ID_S2C_HISTORY_DATA_SEND--101， 初始化窗口
+    def init_ui_101(self):
+        temp_history_data_list = []
+
+        # 2-4 int32
+        history_data_count_bytes = self.client_socket.recv(4)
+        history_data_count = int.from_bytes(history_data_count_bytes, byteorder='big')
+        print(f"history_data_count::{history_data_count}")
+
+        had_recive_count = 0
+
+        #这个接收循环是有问题的，应该不是这样接收的
+        for i in range(history_data_count):
+            history_recive_count_bytes = self.client_socket.recv(4)
+            history_recive_count = int.from_bytes(history_recive_count_bytes, byteorder='big')
+
+            for n in range(history_recive_count):
+                symbol_letter_bytes = self.client_socket.recv(4)
+                symbol_num_bytes = self.client_socket.recv(4)
+                symbol = self.translate_symbol_in_bytes(symbol_letter_bytes, symbol_num_bytes)
+
+                amount_bytes = self.client_socket.recv(4)
+                amount = self.translate_amount_in_bytes(amount_bytes)
+
+                eob_date_bytes = self.client_socket.recv(4)
+                eob_time_bytes = self.client_socket.recv(4)
+                eob = self.translate_eob_in_bytes(eob_date_bytes, eob_time_bytes)
+
+                # print(f"{symbol}:{amount}:{eob}:{main_window.name_dic[symbol]}")
+
+                if symbol in main_window.name_dic.keys():
+                    temp_history_data_list.append(AnalysisHistoryData(symbol, float(amount), eob, main_window.name_dic[symbol]))
+
+            had_recive_count += history_recive_count
+            if had_recive_count == history_data_count:
+                break
+
+        shdf_dic = {}
+        #将装有历史数据的临时集合里的数据，装入shdf_dic(懒得改后面了，先将就着吧)
+        t_i = 0
+        for item in temp_history_data_list:
+            shdf_dic[t_i] = item
+            t_i += 1
+
+        print(f"shdf_dic::@{len(shdf_dic)}")
+
+        for key, value in shdf_dic.items():
+            # print(f"{key}")
+            if value.symbol not in main_window.history_all_dic.keys():
+                
+                #遍历出标的代码，单独装进一个字典中
+                # 注意!!!新版这里添加到 100里面，这里再添加就会出错 2024-7-15
+                # 新版后面，应该就不会用到这个函数了 2024-7-15
+                main_window.symbol_arr.append(value.symbol)
+                #上面100里面已经装填了，测试没问题就删了
+                # main_window.name_dic[value.symbol] = value.name
+
+                temp_history_time_arr = value.eob.split(" ")
+                temp_h_hour_arr = temp_history_time_arr[1].split("+")
+
+                temp_dic = {}
+                shdf_dic[key].eob = temp_h_hour_arr[0]
+                temp_dic[temp_h_hour_arr[0]] = value
+
+                main_window.history_all_dic[value.symbol] = temp_dic
+
+            else:
+                #这里遍历出每一个标的代码对应的历史数据，数据类型是 一个key对应一个dic
+
+                temp_history_time_arr = value.eob.split(" ")
+                temp_h_hour_arr = temp_history_time_arr[1].split("+")
+
+                shdf_dic[key].eob = temp_h_hour_arr[0]
+                main_window.history_all_dic[value.symbol][temp_h_hour_arr[0]] = value
+
+            # print(f"{value}")
+
+        #注意！！这里socket如果出问题，也搬到104最后面去
+        # 新版，这里搬到100里试试
+        main_window.server_sokcet = self.client_socket
+
+        #放在104最后面试试
+        # main_window.is_init_window = True
+        # main_window.has_init_window_single.emit(main_window.is_init_window)
+
+    # 封装 OP_ID_S2C_STOCK_NAME_SEND--100，接收标的代码以及名称
+    def receive_100(self):
+        name_count_bytes = self.client_socket.recv(4)
+        name_count = int.from_bytes(name_count_bytes, byteorder='big')
+
+        #这里报错，暂时不太清，将这里改成字符串接收
+        #symbol_and_name_recive.decode('utf-8'),这里改为utf-8后暂时没发现报错，但还需要观察!!
+        name_index = 0
+        for i in range(name_count):
+
+            symbol_and_name_length_bytes = self.client_socket.recv(4)
+            symbol_and_name_length = int.from_bytes(symbol_and_name_length_bytes, byteorder='big')
+
+            symbol_and_name_recive = self.client_socket.recv(symbol_and_name_length)
+            symbol_and_name = symbol_and_name_recive.decode('utf-8')
+            symbol_name_arr = symbol_and_name.split("+")
+
+            name_index += 1
+            print(f"{symbol_name_arr[0]}:{symbol_name_arr[1]}|{name_index}")
+
+            main_window.name_dic[symbol_name_arr[0]] = symbol_name_arr[1]
+
+            # 这里为新版,在这里将标的代码添加进集合
+            main_window.symbol_arr.append(symbol_name_arr[0])
+            
+        # 新版，socket赋值
+        main_window.server_sokcet = self.client_socket
+
+        # 这里为新版，更改服务器运算，有问题就注释掉
+        main_window.is_init_window_stork_name = True
+        main_window.has_init_stock_name_single.emit(main_window.is_init_window_stork_name)
 
 
     #解析标的时间
