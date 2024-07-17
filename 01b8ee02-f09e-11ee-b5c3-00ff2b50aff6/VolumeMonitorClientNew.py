@@ -14,13 +14,14 @@ import subprocess
 import re
 import uuid
 
-OP_ID_S2C_STOCK_NAME_SEND = 100
-OP_ID_S2C_HISTORY_DATA_SEND = 101
-OP_ID_S2C_REAL_TIME_DATA_SEND = 102
-OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104
+OP_ID_S2C_STOCK_NAME_SEND = 100 # 客户端初始化时，标的代码及其名称
+OP_ID_S2C_HISTORY_DATA_SEND = 101 # 客户端初始化时，历史数据
+OP_ID_S2C_REAL_TIME_DATA_SEND = 102 # 实时数据刷新
+OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时，当日历史数据
+OP_ID_S2C_COMPARISON_REAL_TIME_DATA_SEND = 105 # 新版,客户端实时数据
 
-OP_ID_C2S_QUICK_BUY = 120
-OP_ID_C2S_QUICK_SELL = 121
+OP_ID_C2S_QUICK_BUY = 120 # 买
+OP_ID_C2S_QUICK_SELL = 121 # 卖
 
 load_history_path = 'c:\\TradeLogs\\' + 'AllHistoryInfo' + '.npy'
 
