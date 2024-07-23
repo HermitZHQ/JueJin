@@ -167,6 +167,27 @@ class DownloadHistoryC():
 
         #将所有数据添加到his_data中
         temp_history_dic_index = 0
+
+        # 在这补全09:15:00-09:30:00的数据，注意！09:25:00，09:26:00不需要补全
+        t_h = "09"
+        t_m_1  = "16"
+        t_m_2  = "27"
+        t_s = "00"
+        for temp_stock in self.context.subscription_stock_arr:
+
+            for i in range(9):
+                temp_m = int(t_m_1) + i
+                temp_date_time = str(yesterday_date) + " " + t_h + ":" + str(temp_m) + ":" + t_s + "+08:00"
+                self.his_data_dic[temp_history_dic_index] = {'symbol':temp_stock, 'amount':0.0, 'eob':temp_date_time}
+                temp_history_dic_index += 1
+
+            for i in range(4):
+                temp_m = int(t_m_2) + i
+                temp_date_time = str(yesterday_date) + " " + t_h + ":" + str(temp_m) + ":" + t_s + "+08:00"
+                self.his_data_dic[temp_history_dic_index] = {'symbol':temp_stock, 'amount':0.0, 'eob':temp_date_time}
+                temp_history_dic_index += 1
+
+
         for i in range(2):
             if i == 0:
                 test_yesterday_eob = str(yesterday_date) + " " + "09:25:00+08:00"
