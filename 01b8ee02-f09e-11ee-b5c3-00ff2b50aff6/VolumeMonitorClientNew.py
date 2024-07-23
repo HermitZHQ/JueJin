@@ -18,7 +18,8 @@ OP_ID_S2C_STOCK_NAME_SEND = 100 # 客户端初始化时，标的代码及其名�
 OP_ID_S2C_HISTORY_DATA_SEND = 101 # 客户端初始化时，历史数据
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102 # 实时数据刷新
 OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时，当日历史数据
-OP_ID_S2C_COMPARISON_REAL_TIME_DATA_SEND = 105 # 新版,客户端实时数据
+OP_ID_S2C_MIN_REAL_TIME_DATA_SEND = 105 # 新版,当前分钟实时数据
+OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
 
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
@@ -66,6 +67,7 @@ class TestClientUI(QMainWindow):
     has_today_history_update_single = pyqtSignal(bool)
     has_init_window_single = pyqtSignal(bool)
     has_init_stock_name_single = pyqtSignal(bool)
+    has_refresh_data_single = pyqtSignal(bool)
 
     def __init__(self):  
         super().__init__()  
@@ -114,11 +116,13 @@ class TestClientUI(QMainWindow):
         self.agilitymin_update_widget_dic = {}
         self.agilitymin_reach_set_widget_dic = {}
 
-        self.temp_wait_for_update_dic = {}
+        self.temp_wait_for_update_dic = {} # 临时等待刷新队列，key:w2,w4, value:list, UI中每一个widget对应着一个等待刷新的list
+        self.wait_for_update_dic = {} # # 正式等待刷新队列，key:w2,w4, value:list, UI中每一个widget对应着一个等待刷新的list
         self.temp_wait_for_update_list = []
         self.wait_for_update_list = []
 
         self.is_has_new_data = False
+        self.is_refresh_new_data = False
         self.is_has_today_history_data = False
         self.is_in_updating = False
         self.is_complate_all_init = False
@@ -126,7 +130,7 @@ class TestClientUI(QMainWindow):
         self.is_init_window_stork_name = False #新版，信号，初始化标的代码，名称，以及相关w1--6相关容器
         self.is_w2_refresh = False #控制每分钟数据是否显示
         self.is_w6_refresh = False #控制当日所有数据是否显示
-        self.server_port = 12346 #正式服12345, 调试服12346
+        self.server_port = 12346 #正式服12345, 调试服12346, 天翼云测试12347
 
         self.test_index = 0
 
@@ -139,12 +143,15 @@ class TestClientUI(QMainWindow):
 
         #初始化窗口内的所有容器 w1-w6
         self.init_widget()
+        # 初始化率刷新队列
+        self.ini_wait_dic()
 
         #连接函数，刷新UI
         self.has_new_data_single.connect(self.update_label_for_single)
         self.has_today_history_update_single.connect(self.init_today_history_for_single)
         self.has_init_window_single.connect(self.init_window)
         self.has_init_stock_name_single.connect(self.init_window_stork_name)
+        self.has_refresh_data_single.connect(self.update_label_for_single_new)
 
         # self.load_history_info()
 
@@ -161,8 +168,8 @@ class TestClientUI(QMainWindow):
         #     print(f"{value['symbol']}:{value['amount']}:{value['eob']}")
 
     def connect_server(self):
-        #"8.137.48.212" - 127.0.0.1 # 线程Server 正式服12345, 调试服12346
-        self.send_data_to_server("8.137.48.212", self.server_port, {"name": "Alice", "message": "Hello, server!"})
+        #"8.137.48.212" - 127.0.0.1 # 线程Server 正式服12345, 调试服12346, old-8.137.48.212 new-114.80.33.54
+        self.send_data_to_server("114.80.33.54", self.server_port, {"name": "Alice", "message": "Hello, server!"})
  
     def send_data_to_server(self, server_ip, server_port, data):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -273,6 +280,18 @@ class TestClientUI(QMainWindow):
         # 标的必须用int，4字节
         client_socket.sendall(OP_ID_C2S_QUICK_SELL.to_bytes(4) + int(buy_id).to_bytes(4))
         
+    # 初始化等待刷新队列
+    def ini_wait_dic(self):
+
+        lis1 = []
+        lis2 = []
+        self.wait_for_update_dic["w2"] = lis1
+        self.wait_for_update_dic["w4"] = lis2
+
+        temp_lis1 = []
+        temp_lis2 = []
+        self.temp_wait_for_update_dic["w2"] = temp_lis1
+        self.temp_wait_for_update_dic["w4"] = temp_lis2
 
     #初始化所有容器
     def init_widget(self):
@@ -887,6 +906,16 @@ class TestClientUI(QMainWindow):
 
         return calculate_percent
 
+
+    # 创建label
+    def create_label_with_percent(self, eob, percent, parent_widget):
+        data_label = QLabel(f'{eob}\n{percent}%', parent_widget)  
+        data_label.setMinimumHeight(self.MAX_V_SIZE)  
+        data_label.setMinimumWidth(self.MAX_H_SIZE)
+
+        return data_label
+
+
     #创建当下需要操作的label
     def create_current_label(self, cur_time, his_data, cur_data, percent, parent_widget):
             data_label = QLabel(f'{cur_time}\n{his_data}\n{cur_data}\n{percent}%', parent_widget)  
@@ -1325,6 +1354,40 @@ class TestClientUI(QMainWindow):
             self.timer.start(50)
 
         main_window.temp_symbol_arr.clear()
+    
+
+    # 更新w2-label
+    def update_w2_label(self, symbol, percent, eob):
+        pass
+
+
+    # 更新w4-label
+    def update_w4_label(self, symbol, percent, eob):
+
+        if eob not in self.w4.stock_time_labelinfo_dic[symbol].keys():
+            data_label = self.create_label_with_percent(eob, percent, self.w4.stock_widget_dic[symbol].widget)
+
+            stock_info = StockTimeLbelInfo()
+            stock_info.label = data_label
+            stock_info.percent = percent
+            stock_info.eob = eob
+            self.w4.stock_time_labelinfo_dic[symbol][eob] = stock_info
+
+    # 新版，更新label
+    def update_label_for_single_new(self):
+
+        # StockTimeLbelInfo()
+
+        for key, value in self.wait_for_update_dic.items():
+            if key == "w2":
+                for item in value:
+                    self.update_w2_label(item["symbol"], item["percent"], item["eob_time"])
+            elif key == "w4":
+                for item in value:
+                    self.update_w4_label(item["symbol"], item["percent"], item["eob_time"])
+
+
+    
     #on_tick用
     def update_label_for_single(self):
 
@@ -1593,6 +1656,12 @@ class InitChildQwidGet(QWidget):
         self.bottom_scroll_area.setWidget(self.bottom_update_widget)
         self.overall_widget_layout.addWidget(self.bottom_scroll_area)
 
+class StockTimeLbelInfo():
+    def __init__(self, label, eob, percent):
+        self.label = label
+        self.eob = eob
+        self.percent = percent
+
 class WorkerThread(QThread):  
     finished = pyqtSignal()  
   
@@ -1666,6 +1735,108 @@ class ReciveQThread(QThread):
                 elif operation_id == OP_ID_S2C_HISTORY_TODAY_DATA_SEND:
                     self.init_ui_104()
 
+                #新版本，接收当前分时，达到目标的实时数据 105
+                elif operation_id == OP_ID_S2C_MIN_REAL_TIME_DATA_SEND:
+                    self.refresh_data_105()
+
+                #新版本，接收当前灵活时间分时，达到目标的实时数据 106
+                elif operation_id == OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND:
+                    self.refresh_data_106()
+
+    
+    # 封装 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND--106，当前分钟达标数据刷新
+    def refresh_data_106(self):
+        #2-4 int32
+        symbol_letter_bytes = self.client_socket.recv(4)
+        symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+        symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+        # print(f"symbol_letter:{symbol_letter}")
+
+        #3-4 int32
+        symbol_num_bytes = self.client_socket.recv(4)
+        symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+        #___这里需要补全标的代码前面的0
+        if len(symbol_num) < 6:
+            need_complement = 6 - len(symbol_num)
+            for i in range(need_complement):
+                i += 1
+                symbol_num = '0' + symbol_num
+        # print(f"symbol_num:{symbol_num}")
+
+        #4-4 int32
+        percent_1_bytes = self.client_socket.recv(4)
+        percent_1 = str(int.from_bytes(percent_1_bytes, byteorder='big'))
+
+        #5-4 int32
+        percent_2_bytes = self.client_socket.recv(4)
+        percent_2 = str(int.from_bytes(percent_2_bytes, byteorder='big'))
+
+        #6-4 int32
+        eob_time_bytes = self.client_socket.recv(4)
+        eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
+        eob_time = self.re_complement_time_new(eob_time_str)
+
+        symbol = symbol_letter + '.' + symbol_num
+        percent = percent_1 + '.' + percent_2
+
+        print(f"{symbol}|{percent}|{eob_time}")
+
+        main_window.temp_wait_for_update_dic["w4"].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
+
+        #当数据来时，UI还在更新，则添加先添加到等待集合里
+        if main_window.is_in_updating == False:
+
+            #将临时存放等待刷新的数据集合给准备刷新的集合
+            for item in main_window.temp_wait_for_update_dic["w4"]:
+                temp_item = item
+                main_window.wait_for_update_dic["w4"].append(temp_item)    
+
+            #清空临时list,准备接新的数据
+            main_window.temp_wait_for_update_dic["w4"].clear()
+
+            main_window.is_in_updating = True
+
+            main_window.is_refresh_new_data = True
+            main_window.has_refresh_data_single.emit(main_window.is_refresh_new_data)
+            main_window.is_refresh_new_data = False
+
+
+    # 封装 OP_ID_S2C_MIN_REAL_TIME_DATA_SEND--105，当前分钟达标数据刷新
+    def refresh_data_105(self):
+        #2-4 int32
+        symbol_letter_bytes = self.client_socket.recv(4)
+        symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+        symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+        # print(f"symbol_letter:{symbol_letter}")
+
+        #3-4 int32
+        symbol_num_bytes = self.client_socket.recv(4)
+        symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+        #___这里需要补全标的代码前面的0
+        if len(symbol_num) < 6:
+            need_complement = 6 - len(symbol_num)
+            for i in range(need_complement):
+                i += 1
+                symbol_num = '0' + symbol_num
+        # print(f"symbol_num:{symbol_num}")
+
+        #4-4 int32
+        percent_1_bytes = self.client_socket.recv(4)
+        percent_1 = str(int.from_bytes(percent_1_bytes, byteorder='big'))
+
+        #5-4 int32
+        percent_2_bytes = self.client_socket.recv(4)
+        percent_2 = str(int.from_bytes(percent_2_bytes, byteorder='big'))
+
+        #6-4 int32
+        eob_time_bytes = self.client_socket.recv(4)
+        eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
+        eob_time = self.re_complement_time_new(eob_time_str)
+
+        symbol = symbol_letter + '.' + symbol_num
+        percent = percent_1 + '.' + percent_2
+
+        print(f"{symbol}|{percent}|{eob_time}")
 
     # 封装 OP_ID_S2C_REAL_TIME_DATA_SEND--102, 实时数据刷新
     def real_time_refresh_data(self):
@@ -1959,6 +2130,35 @@ class ReciveQThread(QThread):
         symbol = symbol_letter + '.' + symbol_num
 
         return symbol
+
+    # 拼接时间
+    def re_complement_time_new(self, str_time):
+        # 使用列表推导式和字符串切片来拆解字符串  
+        # chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]  
+        #这里通过长度来判断是否需要补全，例如93103代表 9:30:03，就需要补全，其实只有9点需要补全
+        if len(str_time) == 5:
+            chunks_1 = str_time[0]
+            chunks_2 = str_time[1:]
+            # print(f"{chunks_1}::{chunks_2}")
+            chunks = [chunks_2[i:i+2] for i in range(0, len(chunks_2), 2)]  
+        else:
+            chunks = [str_time[i:i+2] for i in range(0, len(str_time), 2)]
+
+        temp_split_joint_letter = ''
+
+        index = 0
+        for letter in chunks:
+            if index == 0:
+                temp_split_joint_letter = letter
+            else:
+                temp_split_joint_letter = temp_split_joint_letter + ':' + letter
+            index += 1
+
+        #在补全一下，例如9点--补全到09
+        if len(temp_split_joint_letter) == 5:
+            temp_split_joint_letter = '0' + chunks_1 + ":" + temp_split_joint_letter
+
+        return temp_split_joint_letter
 
     #拼接hh:mm:ss+8:00
     def re_complement_time(self, str_time):

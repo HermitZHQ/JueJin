@@ -66,7 +66,7 @@ class StorkInfo:
 class AgilityDataInfo:
     def __init__(self):
         self.symbol = ""
-        self.gility_time = ""
+        self.agility_time = ""
         self.history_amount = 0
         self.current_amount = 0
 
@@ -583,6 +583,8 @@ def init_client_one_time(context):
             # 关盘后，模拟on_bar用,用这个
             # simulation_on_bar(context)
 
+
+
 # 这里开始大改，将改为服务器运算
 def init_client_stork(context):
 
@@ -615,6 +617,12 @@ def init_client_stork(context):
 
                         client_socket = val.client_socket
 
+                        # 读取当日历史数据，用于中途开启
+                        get_history_data_in_today(context)
+
+                        now_data = context.now
+                        print(f"{now_data}")
+
                         #OP_ID_S2C_STOCK_NAME_SEND
                         #这里先将名字传输过去
                         #===================================
@@ -637,6 +645,7 @@ def init_client_stork(context):
                             #这里传输标的代码及名字时，等待一下，看看是否还会报错
                             time.sleep(0.002)
                         #==========================================
+
                         val.is_init = True
                         val.is_initing = False
 
@@ -936,18 +945,12 @@ def calculate_percent_mathod(history_data, current_data):
     if history_data != 0:
         calculate_percent = round(((float(current_data) - float(history_data))/float(history_data)) * 100, 2)
     else:
-        calculate_percent = 'N'
+        calculate_percent = 0 #'N'
 
     return calculate_percent
 
 #__tick__对比历史数据，做出相应计算
 def calculate_percent(context, symbol_id, symbol_time):
-    # context.all_cur_data_info_dic
-    # context.all_agility_data_info_dic
-    # context.estimate_dic
-    # context.all_his_data_with_min_dic
-    # calculate_percent = round((float(cur_d.amount) - float(his_d.amount))/float(cur_d.amount), 2)
-
     # 1分钟的实时数据对比
     min_his_data = context.all_his_data_with_min_dic[symbol_id][symbol_time]
     min_cur_data = context.all_cur_data_info_dic[symbol_id][symbol_time]
@@ -958,8 +961,11 @@ def calculate_percent(context, symbol_id, symbol_time):
     agility_his_data = context.all_agility_data_info_dic[symbol_id][agility_time].history_amount
     agility_cur_data = context.all_agility_data_info_dic[symbol_id][agility_time].current_amount
     agility_percent = calculate_percent_mathod(agility_his_data, agility_cur_data)
+    
 
-    pass
+    if int(min_percent) >= context.data_limit_to_send.min_limit or int(agility_percent) >= context.data_limit_to_send.agility_limit:
+        print(f"{symbol_id}::min:{symbol_time}|{min_percent}|agility:{agility_time}|{agility_percent}")
+
 
 #__tick__存储今日标的实时数据, key--symbol，value--dic(dic=key--min, value--min_data)
 # 数据对比和发送都在这里
@@ -973,7 +979,6 @@ def save_cur_data_to_dic(context, tick):
     temp_tick_time = resolve_time_minute(tick['created_at']) 
     cur_tick_time = temp_tick_time[0] + ":" + temp_tick_time[1] + ":" + "00"
     # 这里需要注意，实时数据中，当前分钟数需要+1再存进dic，还有11:30:00-13:00:00以及15:00:00有些时候超过这2个时间段同样会来为0.0的数据，就不能进行+1
-    # context.datetime_noon_time_s
     # 需要判断是否是中午时间来的数据，否则后面中午时间对比数据，会导致崩溃
     datetime_cur_tick_time = datetime.strptime(cur_tick_time, "%H:%M:%S").time()
     if datetime_cur_tick_time >= context.datetime_noon_time_s and datetime_cur_tick_time < context.datetime_noon_time_e:
@@ -1010,9 +1015,12 @@ def save_cur_data_to_dic(context, tick):
 
     # 保存灵活时间信息  context.all_agility_data_info_dic
     if cur_tick_symbol in context.all_agility_data_info_dic.keys():
-        context.all_agility_data_info_dic[cur_tick_symbol][cur_tick_time].current_amount += cur_tick_amount
+        context.all_agility_data_info_dic[cur_tick_symbol][context.estimate_dic[cur_tick_time]].current_amount += cur_tick_amount
 
-        # print(f"after ::{cur_tick_symbol}|{context.all_cur_data_info_dic[cur_tick_symbol][cur_tick_time]}|{cur_tick_time}")
+    # 数据对比
+    calculate_percent(context, cur_tick_symbol, cur_tick_time)
+
+    # print(f"after ::{cur_tick_symbol}|{context.all_cur_data_info_dic[cur_tick_symbol][cur_tick_time]}|{cur_tick_time}")
 
 
 def on_tick(context, tick):
@@ -1062,7 +1070,7 @@ def on_tick(context, tick):
                         #     print(f"{tick['symbol']}:{tick['last_amount']}:{str(tick['created_at'])}")
 
                         # 存储实时数据, 对比，发送，都在这
-                        save_cur_data_to_dic(context, tick)
+                        # save_cur_data_to_dic(context, tick)
 
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
@@ -1234,7 +1242,7 @@ def init_agilit_dictionary(context, symbol_id):
 
                 temp_agilityinfo = AgilityDataInfo()
                 temp_agilityinfo.symbol = symbol_id
-                temp_agilityinfo.gility_time = temp_his_begin_time # 这里的begin_time指的是此灵活时间段的结束时间
+                temp_agilityinfo.agility_time = temp_his_begin_time # 这里的begin_time指的是此灵活时间段的结束时间
                 temp_agilityinfo.current_amount = 0.0
                 temp_agilityinfo.history_amount = agility_amount
 
@@ -1249,7 +1257,7 @@ def init_agilit_dictionary(context, symbol_id):
                         context.estimate_dic[estimate_time] = temp_his_begin_time
                     temp_estimate_arr.clear()
 
-                # print(f"{temp_agilityinfo.symbol}|{temp_agilityinfo.gility_time}|{temp_agilityinfo.history_amount}")
+                # print(f"{temp_agilityinfo.symbol}|{temp_agilityinfo.agility_time}|{temp_agilityinfo.history_amount}")
                 
             # 重新拼接时间
             temp_his_begin_time = temp_hour + ":" + temp_min + ":" + "00"
@@ -1384,7 +1392,32 @@ def test_get_data(context):
 
     print(f"context.his_data length::{len(context.his_data)}")
 
+# 中途开启时，初始化cud_dic和agility_dic
+def init_min_and_agility_dic(context):
+    #将今天的25min数据装入dic
+    for his_today_25_val in context.his_25_today_amount_data:
+        context.all_cur_data_info_dic[his_today_25_val['symbol']]['09:25:00'] =  his_today_25_val['last_amount']
+    #将没有数据的标的，赋予0.0值
+    for notin_today_25_val in context.notin_25_today_stock_arr:
+        context.all_cur_data_info_dic[notin_today_25_val]['09:25:00'] =  0.0
+    #打包今日此时段之前的历史数据
+    for his_today_val in context.his_data_for_today:
+        temp_time_arr = resolve_time_minute(str(his_today_val['eob']))
+        temp_time = temp_time_arr[0] + ":" + temp_time_arr[1] + ":" + temp_time_arr[2]
 
+        # 初始化cur_dic
+        context.all_cur_data_info_dic[his_today_25_val['symbol']][temp_time] =  his_today_val['amount']
+        # 初始化agility_dic
+        agility_time = context.estimate_dic[temp_time]
+        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount += his_today_val['amount']
+
+    # for s_id, s_val in context.all_agility_data_info_dic.items():
+    #     for agility_key, agility_value in s_val.items():
+    #         print(f"{agility_value.symbol}|{agility_value.agility_time}|{agility_value.history_amount}|{agility_value.current_amount}") 
+        
+
+
+# 获取当日历史数据，基本用于中途开启
 def get_history_data_in_today(context):
     now_data = context.now
     print(f"{now_data}")
@@ -1561,7 +1594,6 @@ def get_history_data_in_today(context):
     print(f"his_25_today_amount_data length:{len(context.his_25_today_amount_data)}")
     print(f"here 1")
 
-
     temp_25_stock_arr = []
     temp_25_today_stock_arr = []
     for item in context.his_25_amount_data:
@@ -1610,6 +1642,10 @@ def get_history_data_in_today(context):
 
     # for item in context.ready_second_for_send:
     #     print(f"total@@@{item['symbol']}:::{item['amount']}:::{item['eob']}")
+
+    # 新版本，服务器上运算，将不需要发送当前分钟数--context.ready_second_for_send
+    # 初始化cur_dic和agility_dic
+    init_min_and_agility_dic(context)
 
 
 def get_previous_or_friday_date():

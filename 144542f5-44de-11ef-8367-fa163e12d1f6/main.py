@@ -37,10 +37,11 @@ OP_ID_S2C_STOCK_NAME_SEND = 100 # 客户端初始化时，标的代码及其名�
 OP_ID_S2C_HISTORY_DATA_SEND = 101 # 客户端初始化时，历史数据
 OP_ID_S2C_REAL_TIME_DATA_SEND = 102 # 实时数据刷新
 OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时，当日历史数据
-OP_ID_S2C_COMPARISON_REAL_TIME_DATA_SEND = 105 # 新版,客户端实时数据
+OP_ID_S2C_MIN_REAL_TIME_DATA_SEND = 105 # 新版,当前分钟实时数据
+OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
 
-OP_ID_C2S_QUICK_BUY = 120
-OP_ID_C2S_QUICK_SELL = 121
+OP_ID_C2S_QUICK_BUY = 120 # 买
+OP_ID_C2S_QUICK_SELL = 121 # 卖
 
 #0v0
 #=-=
@@ -146,6 +147,7 @@ def init(context):
     context.datetime_noon_time_s = datetime.strptime('11:30:00', "%H:%M:%S").time()
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
+    context.datetime_morning_time_s = datetime.strptime('09:30:00', "%H:%M:%S").time()
     
 
     context.subscription_stock_arr = []
@@ -338,8 +340,11 @@ def subscribe_method(context):
 
     info = get_instruments(symbols = context.symbol_str, skip_suspended = False, skip_st = False, df = True)
 
+    #这里需要加一个过滤停牌的功能
+    # print(f"{info}")
+
     for i in range(len(info)):
-        print(f"{info.symbol[i]}|{info.sec_name[i]}")
+        print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}")
         context.temp_matching_dic[info.symbol[i]] = info.sec_name[i]
 
     print(f"ids count:{len(info)}")
@@ -949,33 +954,41 @@ def calculate_percent_mathod(history_data, current_data):
 
     return calculate_percent
 
-#__tick__对比历史数据，做出相应计算
-def calculate_percent(context, symbol_id, symbol_time):
-    # context.all_cur_data_info_dic
-    # context.all_agility_data_info_dic
-    # context.estimate_dic
-    # context.all_his_data_with_min_dic
-    # calculate_percent = round((float(cur_d.amount) - float(his_d.amount))/float(cur_d.amount), 2)
-
+#__tick__对比历史数据，做出相应计算，一分钟对比
+def calculate_percent_min(context, symbol_id, symbol_time):
     # 1分钟的实时数据对比
     min_his_data = context.all_his_data_with_min_dic[symbol_id][symbol_time]
     min_cur_data = context.all_cur_data_info_dic[symbol_id][symbol_time]
     min_percent = calculate_percent_mathod(min_his_data, min_cur_data)
 
+    # if int(min_percent) >= context.data_limit_to_send.min_limit:
+    #     print(f"{symbol_id}::min:{symbol_time}|{min_percent}")
+
+    # print(f"{symbol_id}::min:{symbol_time}|{min_percent}")
+
+    # 返回float类型
+    return min_percent
+
+#__tick__对比历史数据，做出相应计算，灵活分钟对比
+def calculate_percent_agility(context, symbol_id, symbol_time):
     # 灵活时间实时数据对比
     agility_time = context.estimate_dic[symbol_time]
     agility_his_data = context.all_agility_data_info_dic[symbol_id][agility_time].history_amount
     agility_cur_data = context.all_agility_data_info_dic[symbol_id][agility_time].current_amount
     agility_percent = calculate_percent_mathod(agility_his_data, agility_cur_data)
-    
 
-    if int(min_percent) >= context.data_limit_to_send.min_limit or int(agility_percent) >= context.data_limit_to_send.agility_limit:
-        print(f"{symbol_id}::min:{symbol_time}|{min_percent}|agility:{agility_time}|{agility_percent}")
+    # if int(agility_percent) >= context.data_limit_to_send.agility_limit:
+    #     print(f"{symbol_id}::agility:{agility_time}|{agility_percent}")
+
+    # print(f"{symbol_id}::agility:{agility_time}|{agility_percent}")
+
+    # 返回float类型
+    return agility_percent
 
 
 #__tick__存储今日标的实时数据, key--symbol，value--dic(dic=key--min, value--min_data)
 # 数据对比和发送都在这里
-def save_cur_data_to_dic(context, tick):
+def save_cur_data_to_dic(context, tick, clinet_socket):
 
     # print(f"before::{tick['symbol']}|{tick['last_amount']}|{str(tick['created_at'])}")
 
@@ -985,13 +998,15 @@ def save_cur_data_to_dic(context, tick):
     temp_tick_time = resolve_time_minute(tick['created_at']) 
     cur_tick_time = temp_tick_time[0] + ":" + temp_tick_time[1] + ":" + "00"
     # 这里需要注意，实时数据中，当前分钟数需要+1再存进dic，还有11:30:00-13:00:00以及15:00:00有些时候超过这2个时间段同样会来为0.0的数据，就不能进行+1
-    # context.datetime_noon_time_s
     # 需要判断是否是中午时间来的数据，否则后面中午时间对比数据，会导致崩溃
     datetime_cur_tick_time = datetime.strptime(cur_tick_time, "%H:%M:%S").time()
     if datetime_cur_tick_time >= context.datetime_noon_time_s and datetime_cur_tick_time < context.datetime_noon_time_e:
-        cur_tick_time = "13:00:00"
-    elif datetime_cur_tick_time > context.datetime_afternoon_time_s:
-        cur_tick_time = "15:00:00"
+        # 因为下面分钟数会+1，所以这里少设置1分钟
+        cur_tick_time = "11:29:00"
+    elif datetime_cur_tick_time >= context.datetime_afternoon_time_s:
+        cur_tick_time = "14:59:00"
+    elif datetime_cur_tick_time <= context.datetime_morning_time_s:
+        cur_tick_time = "09:25:00"
     else:
         # 正常时段分钟数+1
         temp_hour = temp_tick_time[0]
@@ -1025,9 +1040,20 @@ def save_cur_data_to_dic(context, tick):
         context.all_agility_data_info_dic[cur_tick_symbol][context.estimate_dic[cur_tick_time]].current_amount += cur_tick_amount
 
     # 数据对比
-    calculate_percent(context, cur_tick_symbol, cur_tick_time)
+    min_percent = calculate_percent_min(context, cur_tick_symbol, cur_tick_time)
+    agility_percent = calculate_percent_agility(context, cur_tick_symbol, cur_tick_time)
 
-        # print(f"after ::{cur_tick_symbol}|{context.all_cur_data_info_dic[cur_tick_symbol][cur_tick_time]}|{cur_tick_time}")
+    if int(min_percent) >= context.data_limit_to_send.min_limit:
+        print(f"{cur_tick_symbol}::min:{cur_tick_time}|{min_percent}")
+        send_message_min(context, clinet_socket, cur_tick_symbol, min_percent, cur_tick_time)
+
+    if int(agility_percent) >= context.data_limit_to_send.agility_limit:
+        print(f"{cur_tick_symbol}::agility:{cur_tick_time}|{agility_percent}")
+        send_message_agility(context, clinet_socket, cur_tick_symbol, agility_percent, cur_tick_time)
+
+    # 测试用
+    # if int(min_percent) >= 1000:
+    #     print(f"test")
 
 
 def on_tick(context, tick):
@@ -1077,7 +1103,7 @@ def on_tick(context, tick):
                         #     print(f"{tick['symbol']}:{tick['last_amount']}:{str(tick['created_at'])}")
 
                         # 存储实时数据, 对比，发送，都在这
-                        # save_cur_data_to_dic(context, tick)
+                        save_cur_data_to_dic(context, tick, v)
 
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
@@ -1418,9 +1444,9 @@ def init_min_and_agility_dic(context):
         agility_time = context.estimate_dic[temp_time]
         context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount += his_today_val['amount']
 
-    for s_id, s_val in context.all_agility_data_info_dic.items():
-        for agility_key, agility_value in s_val.items():
-            print(f"{agility_value.symbol}|{agility_value.agility_time}|{agility_value.history_amount}|{agility_value.current_amount}") 
+    # for s_id, s_val in context.all_agility_data_info_dic.items():
+    #     for agility_key, agility_value in s_val.items():
+    #         print(f"{agility_value.symbol}|{agility_value.agility_time}|{agility_value.history_amount}|{agility_value.current_amount}") 
         
 
 
@@ -1791,6 +1817,109 @@ def send_message_second_method(client_socket, context):
         if context.temp_clear_curdata_index == len(context.socket_dic):
             context.cur_data_dic.clear()
             context.temp_clear_curdata_index = 0
+
+# 新版发送线程，当前分钟实时数据发送---106
+def send_message_agility(context, client_socket, s_symbol, s_percent, s_eob):
+    try:
+
+        #OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND - 106
+        sned_data_bytes = translate_data_calculate_percent(context, s_symbol, s_percent, s_eob)
+
+        #4+4+4+4+4+4 = 24字节
+        client_socket.sendall(OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND.to_bytes(4, byteorder='big') + sned_data_bytes)
+
+    except ConnectionResetError:
+         client_socket.close()
+         print("Client disconnected unexpectedly.")
+         print("In send method.")
+         
+         for key, valume in context.socket_dic.items():
+                    if client_socket == valume:
+                        context.delete_temp_adress_arr.append(key)
+                        context.client_init_complete_dic[client_socket] = False
+                        break
+
+    finally:
+        context.temp_clear_curdata_index += 1
+        if context.temp_clear_curdata_index == len(context.socket_dic):
+            context.cur_data_dic.clear()
+            context.temp_clear_curdata_index = 0
+
+# 新版发送线程，当前分钟实时数据发送---105
+def send_message_min(context, client_socket, s_symbol, s_percent, s_eob):
+    try:
+
+        #OP_ID_S2C_MIN_REAL_TIME_DATA_SEND - 105
+        sned_data_bytes = translate_data_calculate_percent(context, s_symbol, s_percent, s_eob)
+
+        #4+4+4+4+4+4 = 24字节
+        client_socket.sendall(OP_ID_S2C_MIN_REAL_TIME_DATA_SEND.to_bytes(4, byteorder='big') + sned_data_bytes)
+
+    except ConnectionResetError:
+         client_socket.close()
+         print("Client disconnected unexpectedly.")
+         print("In send method.")
+         
+         for key, valume in context.socket_dic.items():
+                    if client_socket == valume:
+                        context.delete_temp_adress_arr.append(key)
+                        context.client_init_complete_dic[client_socket] = False
+                        break
+
+    finally:
+        context.temp_clear_curdata_index += 1
+        if context.temp_clear_curdata_index == len(context.socket_dic):
+            context.cur_data_dic.clear()
+            context.temp_clear_curdata_index = 0
+
+# 转为data为bytes--标的id，百分比，时间
+def translate_data_calculate_percent(context, symbol, percent, eob):
+    temp_symbol_letter = 0
+    temp_symbol_num = 0
+    temp_percent_1 = 0
+    temp_percent_2 = 0
+    temp_eob_date = 0
+    temp_eob_time = 0
+
+    #2-4 int32
+    temp_symbol_arr = symbol.split(".")
+    temp_symbol_letter = translate_letter_to_int(temp_symbol_arr[0])
+    symbol_letter_bytes = temp_symbol_letter.to_bytes(4, byteorder='big')
+
+    #3-4 int32
+    temp_symbol_num = int(temp_symbol_arr[1])
+    symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
+
+    #4-4 int32
+    print(f"percent::{percent}")
+    temp_percent_arr = str(percent).split(".")
+    temp_percent_1 = int(temp_percent_arr[0])
+    temp_percent_2 = int(temp_percent_arr[1])
+    percent_bytes_1 = temp_percent_1.to_bytes(4, byteorder='big')
+
+    #5-4 int32
+    percent_bytes_2 = temp_percent_2.to_bytes(4, byteorder='big')
+
+    #6-4 int32
+    temp_hhmmss_arr = eob.split(":")
+    temp_temp_hhmmss = ''
+    for chunk in temp_hhmmss_arr:
+        temp_temp_hhmmss = temp_temp_hhmmss + chunk
+    #这里会有毫秒的情况，例如13:13:13.0000013的情况,如果没有，好像split也不会报错
+    temp_temp_hhmmss_without_dot = temp_temp_hhmmss.split(".")
+    temp_eob_time = int(temp_temp_hhmmss_without_dot[0])
+    eob_time_bytes = temp_eob_time.to_bytes(4, byteorder='big')
+
+    #4+4+4+4+4 = 20字节
+    send_bytes = symbol_letter_bytes + symbol_num_bytes + percent_bytes_1 + percent_bytes_2 + eob_time_bytes
+
+    #调试时，可以注释掉这里，方便查看问题!
+    # if temp_amount != 0 and context.is_can_show_print == True:
+    #     print(f"{temp_symbol_num}:{temp_amount}")
+    
+    return send_bytes
+
+
 
 #将待发送数据，转化为byte
 def translate_send_data_to_bytes(context, symbol, amount, eob):
@@ -2297,7 +2426,8 @@ class ReciveClientThreadC(threading.Thread):
                         
                     #心跳测试，防止中午时段socket断开
                     elif self.context.operation_id_recive == 900:
-                        print(f"this is heartbeat")
+                        # print(f"this is heartbeat")
+                        pass
                     #未注册的MAC地址，直接关闭socket以及接收thread
                     else:
                         print(f"{self.client_socket}:this is no recognition MAC, close socket!!!")
