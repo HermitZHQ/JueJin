@@ -24,7 +24,19 @@ OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
 
-load_history_path = 'c:\\TradeLogs\\' + 'AllHistoryInfo' + '.npy'
+class AllStockAllTimeInfo():
+    def __init__(self, symbol):
+        self.symbol = symbol
+        self.history_amount = {} # 所有历史数据， key<min>, value<history_amount>
+        self.history_agility_amount = {} # 所有历史数据， key<agility_min>, value<history_agility_amount>
+        self.all_min_percent = {} # 当天所有所分钟数，对比数据,  key<min>, value<min_percent>, 即便服务器没过来数据，也会有为0.0的数据，方便排序
+        self.all_agility_percent = {} # 当天所有所灵活分钟数，对比数据,  key<agility_min>, value<agility_percent>, 即便服务器没过来数据，也会有为0.0的数据，方便排序
+
+class OderStockState():
+    def __init__(self, symbol, eob, is_order):
+        self.symbol = symbol
+        self.eob = eob
+        self.is_order = is_order
 
 class AnalysisHistoryData():
     def __init__(self, symbol, amount, eob, name):
@@ -89,6 +101,7 @@ class TestClientUI(QMainWindow):
         self.sort_time_set = 10
         self.update_scrollArea_current_time = 0
         self.update_scrollArea_last_time = 0
+        self.refresh_stork_count = 40 # 设置排列于最前面的固定数量标的数据
         self.win_list = {}
         self.is_can_statistics = False
         self.is_can_ready_statistics = False
@@ -100,7 +113,9 @@ class TestClientUI(QMainWindow):
         self.temp_symbol_arr = []
         self.child_widget_arr = []
         self.hh_mm_ss = []
-        self.select_stork_list = []
+        self.select_stork_list = [] # 用于搜索功能，查找目标标的所在的位置
+        self.refresh_in_stock_arr = [] # 只刷新在这个list里的标的label, 只用于判断
+        self.refresh_in_select_arr = [] # 由于当单独搜索时，需要实时显示数据，添加此集合，只要此集合不为空，就会优先添加进refresh_in_stock_arr集合中
 
         self.current_data_dic = {}
         self.temp_current_data_dic = {}
@@ -110,11 +125,15 @@ class TestClientUI(QMainWindow):
         self.agility_data_dic = {}
         self.simple_stock_with_stock = {}
 
-        self.order_widget_dic = {}
+        self.order_widget_dic = {} # 排序所需要的值，key<symbol>, value<agility_percent>
         self.onemin_update_widget_dic = {}
         self.onemin_reach_set_widget_dir = {}
         self.agilitymin_update_widget_dic = {}
         self.agilitymin_reach_set_widget_dic = {}
+        self.stock_order_time = {} # 根据标的的当前时间判断是否激活排序，key<symbol>, value<min_time>
+        self.stock_order_one_time = {} # 此标的，在当前分钟内，如果达到预设的值，则重新排序一次，key<symbol>, value<OderStockState>
+        self.all_stock_all_time_info = {} # 所有标的当天所有数据，即使服务器没有数据过来，也会有0.0的数据, key<symbol>, value<AllStockAllTimeInfo()>
+        self.estimate_dic = {} # 灵活时间段中的每一时段，key--min, value--agilite_end_time(当前时间段，所对应的结束时间，方便后续其他dic直接调用),此dic为多个key指向同一个value
 
         self.temp_wait_for_update_dic = {} # 临时等待刷新队列，key:w2,w4, value:list, UI中每一个widget对应着一个等待刷新的list
         self.wait_for_update_dic = {} # # 正式等待刷新队列，key:w2,w4, value:list, UI中每一个widget对应着一个等待刷新的list
@@ -130,7 +149,7 @@ class TestClientUI(QMainWindow):
         self.is_init_window_stork_name = False #新版，信号，初始化标的代码，名称，以及相关w1--6相关容器
         self.is_w2_refresh = False #控制每分钟数据是否显示
         self.is_w6_refresh = False #控制当日所有数据是否显示
-        self.server_port = 12346 #正式服12345, 调试服12346, 天翼云测试12347
+        self.server_port = 12347 #正式服12345, 调试服12346, 天翼云测试12347
 
         self.test_index = 0
 
@@ -153,19 +172,164 @@ class TestClientUI(QMainWindow):
         self.has_init_stock_name_single.connect(self.init_window_stork_name)
         self.has_refresh_data_single.connect(self.update_label_for_single_new)
 
-        # self.load_history_info()
+        # self.load_history_from_file()
 
         self.connect_server()
 
+    # 初始化该标的，所有时间段的数据(0.0)，包括灵活时间段
+    def init_all_stock_info(self, symbol_id):
 
-    def load_history_info(self):
-        print(f"load_history_path:{load_history_path}")
-        temp_history_dic = np.load(load_history_path, allow_pickle=True)
-        temp_history_dic = dict(temp_history_dic.tolist())
-        print(f"temp_history_dic length:{len(temp_history_dic)}")
+        is_replenish = False
+        temp_his_begin_time = ""
+        temp_time_index = 0
+        temp_run_count = 0
 
-        # for value in temp_history_dic.values():
+        is_estimate_init = False
+        temp_estimate_arr = []
+
+        for i in range(2):
+
+            if temp_run_count == 0:
+                temp_his_begin_time = "09:16:00"    # "09:31:00"
+            elif temp_run_count == 1:
+                temp_his_begin_time = "13:01:00"
+                is_replenish = False
+
+            # 注意！！！这是while循环
+            while is_replenish == False and temp_run_count <= 1:
+
+                if temp_his_begin_time not in self.all_stock_all_time_info[symbol_id].history_amount.keys():
+                    # 初始化每分钟历史数据，后续可能会因为功能需求用上这里
+                    self.all_stock_all_time_info[symbol_id].history_amount[temp_his_begin_time] = 0.0
+                    # 初始化每分钟对比数据，方便后续排序的使用
+                    self.all_stock_all_time_info[symbol_id].all_min_percent[temp_his_begin_time] = 0.0
+
+                temp_hh_mm_ss = temp_his_begin_time.split(":")
+                
+                temp_hour = temp_hh_mm_ss[0]
+                temp_min = temp_hh_mm_ss[1]
+
+                temp_next_min = int(temp_min) + 1
+                # 这里需要判断当前分钟是否为个位数，如果是就会与key匹配不上，例如10:9:00-对应应该是10:09:00
+                if len(str(temp_next_min)) == 1:
+                    temp_min = '0' + str(temp_next_min)
+                else:
+                    temp_min = str(temp_next_min)
+                # 这里需要判断当前分钟是否满了60，如果满了60，小时就需要+1，并且将当前分钟数重置为00
+                if temp_min == '60':
+                    temp_hour = str(int(temp_hour) + 1)
+                    temp_min = '00'
+
+                temp_time_index += 1
+                temp_estimate_arr.append(temp_his_begin_time)
+
+                # 判断是否达到所设置的灵活时间，达到就进行赋值，否则进行相加
+                if temp_time_index == self.set_agility_update_time:
+                    # 初始化灵活时间段对比数据
+                    self.all_stock_all_time_info[symbol_id].all_agility_percent[temp_his_begin_time] = 0.0
+
+                    temp_time_index = 0
+
+                    # 初始化灵活时间，每分钟所对应的灵活时间段，方便后续其他dic直接调用，不用花费时间去对比
+                    if is_estimate_init == False:
+                        for estimate_time in temp_estimate_arr:
+                            self.estimate_dic[estimate_time] = temp_his_begin_time
+                        temp_estimate_arr.clear()
+
+                    # print(f"{temp_his_begin_time}|{self.all_stock_all_time_info[symbol_id].all_agility_percent[temp_his_begin_time]}")
+                    
+                # 重新拼接时间
+                temp_his_begin_time = temp_hour + ":" + temp_min + ":" + "00"
+                # 当时间为11:31:00，代表上午时间段结束，退出while循坏
+                if temp_his_begin_time == "11:31:00" or temp_his_begin_time == "15:01:00":
+                    is_replenish = True
+                    temp_run_count += 1
+
+        # 第一次跑完for循环，代表estimate_dic初始化完成，后面就不用再初始化了
+        is_estimate_init = True
+        # for key, value in self.estimate_dic.items():
+        #     print(f"{key}-{value}")
+
+    # 获得昨天日期
+    def get_previous_or_friday_date(self):
+        # 获取当前日期
+        today = datetime.now().date()
+
+        # 获取前一天的日期
+        previous_day = today - timedelta(days=1)
+
+        # 获取前一天的星期几（0是星期一，6是星期天）
+        weekday = previous_day.weekday()
+
+        # 如果前一天是星期六（weekday == 5）或星期天（weekday == 6）
+        if weekday >= 5:
+            # 获取星期五的日期（如果是星期天，需要减去2天；如果是星期六，需要减去1天）
+            friday_date = previous_day - timedelta(days=weekday - 4)
+            return friday_date
+        else:
+            # 前一天不是星期六或星期天，直接返回前一天的日期
+            return previous_day
+
+    #从文件中获取历史数据，其中包括了集合进价，暂时不用！！
+    def load_history_from_file(self):
+        yesterday_date = self.get_previous_or_friday_date()
+        str_load_history = 'AllHistoryInfo'
+        load_history_path = 'c:\\TradeLogs\\' + str_load_history + " " + str(yesterday_date) + '.npy' #加上日期，方便后面查找调用
+
+        his_data = np.load(load_history_path, allow_pickle=True)
+        his_data = dict(his_data.tolist())
+
+        # for value in context.his_data.values():
         #     print(f"{value['symbol']}:{value['amount']}:{value['eob']}")
+
+        #这里需要改下，改为dic类型，一个symbol对应其相应历史数据list
+        #这样为了后续方便遍历已订阅的历史数据并发送给客户端，而不是发送全部历史数据(包含位订阅的)
+        #key--symbol, value--list   context.all_his_data_dic, 新版本，这里后面可能会用到，当特别关注的标的，就会需要发送全天历史数据! 
+        # 注意！！后面可能不会发送全天数据，所有标的历史数据可能会拷贝到客户端，客户端也会直接从文件中直接读取历史数据！！   
+        # for val_data in his_data.values():
+        #     if val_data['symbol'] not in all_his_data_dic.keys():
+        #         temp_list = []
+        #         all_his_data_dic[val_data['symbol']] = temp_list
+
+        # for value in context.his_data.values():
+        #     all_his_data_dic[value['symbol']].append(value)
+
+        # #新版本，因为要在服务器上进行数据运算,将历史数据都添加到dic中，dic类型, 一个symbol对应一个dic
+        # #key--symbol, value--dic(dic::key--time, value--data)
+        # for symbol_id in subscription_stock_arr:
+
+        #     temp_min_dic = {}
+        #     all_his_data_with_min_dic[symbol_id] = temp_min_dic
+
+        #     if symbol_id in all_his_data_dic.keys():
+        #         for min_data in all_his_data_dic[symbol_id]:
+        #             amount = min_data['amount']
+        #             eob = min_data['eob']
+
+        #             temp_hh_mm_ss = resolve_time_minute(eob)
+        #             temp_data_time = temp_hh_mm_ss[0] + ":" + temp_hh_mm_ss[1] + ":" + temp_hh_mm_ss[2]
+
+        #             all_his_data_with_min_dic[symbol_id][temp_data_time] = amount
+
+        #             # print(f"{symbol_id}|{amount}|{temp_data_time}")
+
+        #     # 在这补全09:15:00-09:30:00的数据，注意！09:25:00，09:26:00不需要补全
+        #     # 或者！！直接从下载历史数据工具补全
+
+        #     # 这里需要初始化下，当日所有标的实时数据dic
+        #     temp_dic = {}
+        #     all_cur_data_info_dic[symbol_id] = temp_dic
+
+        #     # 这里初始化，灵活时间的数据，时间从开始一直初始化到结束 09:25-15:00
+        #     # 注意！！这里需要一个写一个方法，来判断实时数据中，当前分钟数，是属于哪一段灵活时间
+        #     # 这里在context中添加一个dic以及一个index，来快速判断当前时间是属于哪一段灵活时间，避免后续大量实时数据来的时候每一次都需要判断  estimate_index - estimate_dic
+        #     temp_agility_dic = {}
+        #     all_agility_data_info_dic[symbol_id] = temp_agility_dic
+
+        #     init_agilit_dictionary(context, symbol_id)
+
+
+        # print(f"load history success :{len(context.his_data)}")
 
     def connect_server(self):
         #"8.137.48.212" - 127.0.0.1 # 线程Server 正式服12345, 调试服12346, old-8.137.48.212 new-114.80.33.54
@@ -544,11 +708,16 @@ class TestClientUI(QMainWindow):
             temp_list = []
             self.agility_data_dic[item] = temp_list
 
-            self.order_widget_dic[item] = 0
+            self.order_widget_dic[item] = 0.0
 
             print(f"{item}")
 
             self.simple_stock_with_stock[item[-6:]] = item
+            # 初始化排序dic OderStockState()
+            self.stock_order_one_time[item] = OderStockState(item, "", False)
+            # 初始化所有标的所有数据dic
+            self.all_stock_all_time_info[item] = AllStockAllTimeInfo(item)
+            self.init_all_stock_info(item)
 
             #初始化所有标的的w6今日所有成交额的cunrrent_label，避免后面再刷新中创建
             # 新版本，这里后面可能会用到，先注释掉
@@ -1356,9 +1525,94 @@ class TestClientUI(QMainWindow):
         main_window.temp_symbol_arr.clear()
     
 
+    # 排序
+    def order_label(self, symbol, eob):
+
+        if self.stock_order_one_time[symbol].eob != eob or self.stock_order_one_time[symbol].is_order == False:
+
+            # 进入新的一分钟时，将此设置为false
+            # self.stock_order_one_time = False
+
+            # 该标的在当前分钟内，达到预设值，并且进行了一次重新排序
+            self.stock_order_one_time[symbol].is_order = True
+
+            # 重新排序
+            # 需要先将当前灵活分钟的值赋予排序用的dic
+            # 现在客户端上的卡住，应该是由于重新排序引起的，这里需要重新，不能所有标的全部重新排序，需要用插入的方式来达到排序的方式
+            for temp_symbol in self.symbol_arr:
+                self.order_widget_dic[temp_symbol] = float(self.all_stock_all_time_info[temp_symbol].all_agility_percent[self.estimate_dic[eob]])
+
+            sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
+
+            find_target_symbol_index = 0
+            for key, val in sorted_items_desc:
+                if key == symbol:
+                    break
+                else:
+                    find_target_symbol_index += 1
+
+            temp_for_select_stork_index = 0
+            self.select_stork_list.clear()
+
+            t_index = 0
+            self.refresh_in_stock_arr.clear()
+
+            remove_widget = None
+
+            for child_widget in self.child_widget_arr:
+
+                for key, val in child_widget.stock_widget_dic.items():
+                    # 先移除widget，用于后面重新添加排序后得内容
+                    # 暂时注释掉，更改为插入式排序
+                    # child_widget.bottom_update_widget_layout.removeWidget(val.widget)
+                    if key == symbol:
+                        remove_widget = child_widget.stock_widget_dic[key].widget
+                        remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+
+                        child_widget.bottom_update_widget_layout.takeAt(remove_index)
+                        child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
+                        break
+
+                #重新添加排序过后的widget
+                for key, val in sorted_items_desc:
+                    # 暂时注释掉，更改为插入式排序
+                    # child_widget.bottom_update_widget_layout.addWidget(child_widget.stock_widget_dic[key].widget)
+
+                    if temp_for_select_stork_index == 0:
+                        self.select_stork_list.append(key)
+
+                    # 紧急！临时添加！！添加进刷新dic，只刷新存在于此dic中的标的label
+                    # 这里现在还需要优先将搜索的标的添加进允许刷新队列中
+                    if len(self.refresh_in_select_arr) != 0:
+                        for select_symbol in self.refresh_in_select_arr:
+                            self.refresh_in_stock_arr.append(select_symbol)
+
+                    if t_index <= self.refresh_stork_count:
+                        self.refresh_in_stock_arr.append(key)
+                    t_index += 1
+
+                temp_for_select_stork_index += 1
+
+            # 由于按照每分钟刷新目前在w2里面被禁用了，暂时添加在这里试试
+            self.stock_order_one_time[symbol].eob = eob
+
+
     # 更新w2-label
     def update_w2_label(self, symbol, percent, eob):
-        pass
+
+        if eob not in self.w2.stock_time_labelinfo_dic[symbol].keys():
+            data_label = self.create_label_with_percent(eob, percent, self.w2.stock_widget_dic[symbol].widget)
+
+            stock_info = StockTimeLbelInfo(data_label, percent, eob)
+            self.w2.stock_time_labelinfo_dic[symbol][eob] = stock_info
+
+            self.w2.stock_widget_dic[symbol].layout.addWidget(data_label)
+
+        else:
+            self.w2.stock_time_labelinfo_dic[symbol][eob].percent = percent
+            self.w2.stock_time_labelinfo_dic[symbol][eob].label.setText(f'{eob}\n{percent}%')
+
+        self.all_stock_all_time_info[symbol].all_min_percent[eob] = percent
 
 
     # 更新w4-label
@@ -1367,27 +1621,38 @@ class TestClientUI(QMainWindow):
         if eob not in self.w4.stock_time_labelinfo_dic[symbol].keys():
             data_label = self.create_label_with_percent(eob, percent, self.w4.stock_widget_dic[symbol].widget)
 
-            stock_info = StockTimeLbelInfo()
-            stock_info.label = data_label
-            stock_info.percent = percent
-            stock_info.eob = eob
+            stock_info = StockTimeLbelInfo(data_label, percent, eob)
             self.w4.stock_time_labelinfo_dic[symbol][eob] = stock_info
+
+            self.w4.stock_widget_dic[symbol].layout.addWidget(data_label)
+
+        else:
+            self.w4.stock_time_labelinfo_dic[symbol][eob].percent = percent
+            self.w4.stock_time_labelinfo_dic[symbol][eob].label.setText(f'{eob}\n{percent}%')
+
+        self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
+
+        # 将灵活时间段的值存进排序中,这里应该不需要了，因为在排序中重新赋了一次值！
+        # self.order_widget_dic[symbol] = percent
+        # self.order_label(symbol, eob)
+
 
     # 新版，更新label
     def update_label_for_single_new(self):
-
-        # StockTimeLbelInfo()
 
         for key, value in self.wait_for_update_dic.items():
             if key == "w2":
                 for item in value:
                     self.update_w2_label(item["symbol"], item["percent"], item["eob_time"])
+                self.wait_for_update_dic["w2"].clear()
+                
             elif key == "w4":
                 for item in value:
                     self.update_w4_label(item["symbol"], item["percent"], item["eob_time"])
+                self.wait_for_update_dic["w4"].clear()
 
+        self.is_in_updating = False
 
-    
     #on_tick用
     def update_label_for_single(self):
 
@@ -1716,7 +1981,7 @@ class ReciveQThread(QThread):
                 # 解析JSON响应
                 operation_id = int.from_bytes(operation_id_data, byteorder='big')
 
-                print(f"{operation_id}")
+                # print(f"{operation_id}")
 
                 #持续更新实时数据,此100暂时不使用
                 #这里更改为二进制接收标的名称       100
@@ -1779,8 +2044,7 @@ class ReciveQThread(QThread):
         symbol = symbol_letter + '.' + symbol_num
         percent = percent_1 + '.' + percent_2
 
-        print(f"{symbol}|{percent}|{eob_time}")
-
+        # print(f"106::{symbol}|{percent}|{eob_time}")
         main_window.temp_wait_for_update_dic["w4"].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
 
         #当数据来时，UI还在更新，则添加先添加到等待集合里
@@ -1836,7 +2100,25 @@ class ReciveQThread(QThread):
         symbol = symbol_letter + '.' + symbol_num
         percent = percent_1 + '.' + percent_2
 
-        print(f"{symbol}|{percent}|{eob_time}")
+        # print(f"105::{symbol}|{percent}|{eob_time}")
+        main_window.temp_wait_for_update_dic["w2"].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
+
+        #当数据来时，UI还在更新，则添加先添加到等待集合里
+        if main_window.is_in_updating == False:
+
+            #将临时存放等待刷新的数据集合给准备刷新的集合
+            for item in main_window.temp_wait_for_update_dic["w2"]:
+                temp_item = item
+                main_window.wait_for_update_dic["w2"].append(temp_item)    
+
+            #清空临时list,准备接新的数据
+            main_window.temp_wait_for_update_dic["w2"].clear()
+
+            main_window.is_in_updating = True
+
+            main_window.is_refresh_new_data = True
+            main_window.has_refresh_data_single.emit(main_window.is_refresh_new_data)
+            main_window.is_refresh_new_data = False
 
     # 封装 OP_ID_S2C_REAL_TIME_DATA_SEND--102, 实时数据刷新
     def real_time_refresh_data(self):
