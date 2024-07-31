@@ -53,7 +53,7 @@ def VolumeMonitorDebug():
 
 class DataLimitToSend:
     def __init__(self):
-        self.min_limit = 5000 # 1分钟实时数据超过这个界限,就send
+        self.min_limit = 1000 # 1分钟实时数据超过这个界限,就send
         self.agility_limit = 500 # 灵活实时数据超过这个界限，就sned
 
 class StorkInfo:
@@ -961,9 +961,6 @@ def calculate_percent_min(context, symbol_id, symbol_time):
     min_cur_data = context.all_cur_data_info_dic[symbol_id][symbol_time]
     min_percent = calculate_percent_mathod(min_his_data, min_cur_data)
 
-    # if int(min_percent) >= context.data_limit_to_send.min_limit:
-    #     print(f"{symbol_id}::min:{symbol_time}|{min_percent}")
-
     # print(f"{symbol_id}::min:{symbol_time}|{min_percent}")
 
     # 返回float类型
@@ -976,9 +973,6 @@ def calculate_percent_agility(context, symbol_id, symbol_time):
     agility_his_data = context.all_agility_data_info_dic[symbol_id][agility_time].history_amount
     agility_cur_data = context.all_agility_data_info_dic[symbol_id][agility_time].current_amount
     agility_percent = calculate_percent_mathod(agility_his_data, agility_cur_data)
-
-    # if int(agility_percent) >= context.data_limit_to_send.agility_limit:
-    #     print(f"{symbol_id}::agility:{agility_time}|{agility_percent}")
 
     # print(f"{symbol_id}::agility:{agility_time}|{agility_percent}")
 
@@ -1043,13 +1037,15 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
     min_percent = calculate_percent_min(context, cur_tick_symbol, cur_tick_time)
     agility_percent = calculate_percent_agility(context, cur_tick_symbol, cur_tick_time)
 
+    # 满足条件向客户端发送
+    # 当前分钟
     if int(min_percent) >= context.data_limit_to_send.min_limit:
         print(f"{cur_tick_symbol}::min:{cur_tick_time}|{min_percent}")
         send_message_min(context, clinet_socket, cur_tick_symbol, min_percent, cur_tick_time)
-
+    # 当前灵活分钟
     if int(agility_percent) >= context.data_limit_to_send.agility_limit:
-        print(f"{cur_tick_symbol}::agility:{cur_tick_time}|{agility_percent}")
-        send_message_agility(context, clinet_socket, cur_tick_symbol, agility_percent, cur_tick_time)
+        print(f"{cur_tick_symbol}::agility:{context.estimate_dic[cur_tick_time]}|{agility_percent}")
+        send_message_agility(context, clinet_socket, cur_tick_symbol, agility_percent, context.estimate_dic[cur_tick_time])
 
     # 测试用
     # if int(min_percent) >= 1000:
@@ -1087,20 +1083,9 @@ def on_tick(context, tick):
 
                     if context.client_init_complete_dic[v] == True:
 
-                        #当客户端初始化完成后，向客户端发送第一次数据
-                        #    1
-                        # send_data_in_first(context, v)
-
                         #由于在tick里，server与client的传输结构模式，这里需要补发一次当前tick来的数据
                         context.cur_data_dic.clear() 
                         context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
-
-                        #   2
-                        # send_message_second_method(v, context)
-
-                        # 新版
-                        # if context.is_show_print.is_show_tick_print == True:
-                        #     print(f"{tick['symbol']}:{tick['last_amount']}:{str(tick['created_at'])}")
 
                         # 存储实时数据, 对比，发送，都在这
                         save_cur_data_to_dic(context, tick, v)
@@ -1234,7 +1219,7 @@ def init_agilit_dictionary(context, symbol_id):
     for i in range(2):
 
         if temp_run_count == 0:
-            temp_his_begin_time = "09:31:00"
+            temp_his_begin_time = "09:16:00"    # "09:31:00"
         elif temp_run_count == 1:
             temp_his_begin_time = "13:01:00"
             is_replenish = False
@@ -1319,7 +1304,8 @@ def load_history_from_file(context):
 
     #这里需要改下，改为dic类型，一个symbol对应其相应历史数据list
     #这样为了后续方便遍历已订阅的历史数据并发送给客户端，而不是发送全部历史数据(包含位订阅的)
-    #key--symbol, value--list   context.all_his_data_dic, 新版本，这里后面可能会用到，当特别关注的标的，就会需要发送全天历史数据!    
+    #key--symbol, value--list   context.all_his_data_dic, 新版本，这里后面可能会用到，当特别关注的标的，就会需要发送全天历史数据! 
+    # 注意！！后面可能不会发送全天数据，所有标的历史数据可能会拷贝到客户端，客户端也会直接从文件中直接读取历史数据！！   
     for val_data in context.his_data.values():
         if val_data['symbol'] not in context.all_his_data_dic.keys():
             temp_list = []
@@ -1344,6 +1330,11 @@ def load_history_from_file(context):
                 temp_data_time = temp_hh_mm_ss[0] + ":" + temp_hh_mm_ss[1] + ":" + temp_hh_mm_ss[2]
 
                 context.all_his_data_with_min_dic[symbol_id][temp_data_time] = amount
+
+                # print(f"{symbol_id}|{amount}|{temp_data_time}")
+
+        # 在这补全09:15:00-09:30:00的数据，注意！09:25:00，09:26:00不需要补全
+        # 或者！！直接从下载历史数据工具补全
 
         # 这里需要初始化下，当日所有标的实时数据dic
         temp_dic = {}
@@ -1891,7 +1882,6 @@ def translate_data_calculate_percent(context, symbol, percent, eob):
     symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
 
     #4-4 int32
-    print(f"percent::{percent}")
     temp_percent_arr = str(percent).split(".")
     temp_percent_1 = int(temp_percent_arr[0])
     temp_percent_2 = int(temp_percent_arr[1])
@@ -2432,7 +2422,7 @@ class ReciveClientThreadC(threading.Thread):
                     else:
                         print(f"{self.client_socket}:this is no recognition MAC, close socket!!!")
                         # 非注册客户端，连接上来后引发报错问题，从这里直接删除，未验证是否还会引发报错
-                        self.context.delete_client_socket_arr.append(self.client_socket)
+                        self.context.delete_client_socket_arr.append(self.client_address)
                         del self.context.client_init_complete_dic[self.client_socket]
                         self.client_socket.close()
                         self.stop()

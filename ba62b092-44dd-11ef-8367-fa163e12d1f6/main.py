@@ -169,6 +169,7 @@ class DownloadHistoryC():
         temp_history_dic_index = 0
 
         # 在这补全09:15:00-09:30:00的数据，注意！09:25:00，09:26:00不需要补全
+        # 老版本用的时候注销这里
         t_h = "09"
         t_m_1  = "16"
         t_m_2  = "27"
@@ -186,6 +187,7 @@ class DownloadHistoryC():
                 temp_date_time = str(yesterday_date) + " " + t_h + ":" + str(temp_m) + ":" + t_s + "+08:00"
                 self.his_data_dic[temp_history_dic_index] = {'symbol':temp_stock, 'amount':0.0, 'eob':temp_date_time}
                 temp_history_dic_index += 1
+        # =========================
 
 
         for i in range(2):
