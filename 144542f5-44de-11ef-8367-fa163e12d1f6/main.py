@@ -42,6 +42,8 @@ OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
 
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
+OP_ID_C2S_SELECT_STOCK_SHOW = 130 # 处于搜索中标的，且没有达标的标的，依然显示数据(原先是没有达标，服务器不会发送数据)
+OP_ID_C2S_TOP_STOCK_SHOW = 131 # 处于置顶中标的，且没有达标的标的，依然显示数据(原先是没有达标，服务器不会发送数据)
 
 #0v0
 #=-=
@@ -53,16 +55,19 @@ def VolumeMonitorDebug():
 
 class DataLimitToSend:
     def __init__(self):
-        self.min_limit = 1000 # 1分钟实时数据超过这个界限,就send
-        self.agility_limit = 500 # 灵活实时数据超过这个界限，就sned
+        self.min_limit = 20000 # 1分钟实时数据超过这个界限,就send
+        self.agility_limit = 800 # 灵活实时数据超过这个界限，就sned
 
 class StorkInfo:
     def __init__(self):
         self.symbol = ""
-        self.today_data = {} # key--min, value--min_data
-        self.history_data = {} # key--min, value--min_data
+        self.today_data = {} # 今天每分钟数据 key<min>, value<min_today_amount>
+        self.history_data = {} # 昨日历史每分钟数据 key<min>, value<min_history_amount>
+        self.agility_data = {} # 灵活时间数据，其中包括历史数据换算成的灵活时间数据和今日的灵活时间数据，key<agility_min>, value<AgilityDataInfo()>
         self.history_amount = 0
         self.current_amount = 0
+        self.pre_close = 0.0 # 昨日关盘价
+        self.sec_name = "" # 标的中文名称
 
 class AgilityDataInfo:
     def __init__(self):
@@ -148,7 +153,6 @@ def init(context):
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
     context.datetime_morning_time_s = datetime.strptime('09:30:00', "%H:%M:%S").time()
-    
 
     context.subscription_stock_arr = []
     context.mac_address_arr = []
@@ -157,6 +161,8 @@ def init(context):
     context.his_data_for_today_second = []
     context.his_25_amount_data = []
     context.his_25_today_amount_data = []
+    context.refresh_select_stock_arr = [] # 发送在此集合中的标的信息，如果没达标则发送，达标就不管了
+    context.top_stock_arr = [] # 置顶标的集合
 
     context.symbol_arr = {}
     context.his_symbol_data_arr = set()
@@ -165,6 +171,7 @@ def init(context):
     context.all_his_data_with_min_dic = {} # 所有标的历史数据，只包含在列表的标的，key--symbol，value--dic(dic=key--min, value--min_data)(每分钟所对应的历史数据)
     context.all_cur_data_info_dic = {} # 所有标的，只包含在列表的标的，今日所有的实时数据，key--symbol，value--dic(dic=key--min, value--min_data)
     context.all_agility_data_info_dic = {} # 所有标的的灵活时间对比dic，key--symbol，value--dic(dic=key--agilite_time, value--AgilityDataInfo(CLASS))
+    context.all_stock_info_dic = {} # 所有标的的相关信息 key<symbol_id>, value<StorkInfo()>
     context.his_today_data_dic = {}
     context.cur_data_dic = {}
     context.cur_data_second_dic = {}
@@ -344,8 +351,13 @@ def subscribe_method(context):
     # print(f"{info}")
 
     for i in range(len(info)):
-        print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}")
+        print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}|{info.pre_close[i]}")
         context.temp_matching_dic[info.symbol[i]] = info.sec_name[i]
+        # 初始化所有标的，相关信息，部分数据在其他地方初始化
+        context.all_stock_info_dic[info.symbol[i]] = StorkInfo()
+        context.all_stock_info_dic[info.symbol[i]].symbol = info.symbol[i]
+        context.all_stock_info_dic[info.symbol[i]].sec_name = info.sec_name[i]
+        context.all_stock_info_dic[info.symbol[i]].pre_close = info.pre_close[i]
 
     print(f"ids count:{len(info)}")
     
@@ -999,7 +1011,7 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
         cur_tick_time = "11:29:00"
     elif datetime_cur_tick_time >= context.datetime_afternoon_time_s:
         cur_tick_time = "14:59:00"
-    elif datetime_cur_tick_time <= context.datetime_morning_time_s:
+    elif datetime_cur_tick_time < context.datetime_morning_time_s:
         cur_tick_time = "09:25:00"
     else:
         # 正常时段分钟数+1
@@ -1042,10 +1054,17 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
     if int(min_percent) >= context.data_limit_to_send.min_limit:
         print(f"{cur_tick_symbol}::min:{cur_tick_time}|{min_percent}")
         send_message_min(context, clinet_socket, cur_tick_symbol, min_percent, cur_tick_time)
-    # 当前灵活分钟
-    if int(agility_percent) >= context.data_limit_to_send.agility_limit:
+    # 当前灵活分钟或当前标的是处于搜索中的标的
+    if int(agility_percent) >= context.data_limit_to_send.agility_limit or cur_tick_symbol in context.refresh_select_stock_arr or cur_tick_symbol in context.top_stock_arr:
         print(f"{cur_tick_symbol}::agility:{context.estimate_dic[cur_tick_time]}|{agility_percent}")
-        send_message_agility(context, clinet_socket, cur_tick_symbol, agility_percent, context.estimate_dic[cur_tick_time])
+
+        # 当此标的为搜索中的标的时候，且当前percent为0或者小于0，则直接发送0.0数据，暂时！
+        temp_agility_percent = 0.0
+        if agility_percent > 0.0:
+            temp_agility_percent = agility_percent
+
+        send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
+
 
     # 测试用
     # if int(min_percent) >= 1000:
@@ -1286,6 +1305,9 @@ def init_agilit_dictionary(context, symbol_id):
 
     # 第一次跑完for循环，代表estimate_dic初始化完成，后面就不用再初始化了
     is_estimate_init = True
+    # 初始化stock info dic的agility_data
+    context.all_stock_info_dic[symbol_id].agility_data = context.all_agility_data_info_dic[symbol_id]
+
     # for key, value in context.estimate_dic.items():
     #     print(f"{key}-{value}")
 
@@ -1320,6 +1342,8 @@ def load_history_from_file(context):
 
         temp_min_dic = {}
         context.all_his_data_with_min_dic[symbol_id] = temp_min_dic
+        # 初始化所有标的相关信息的dic
+        context.all_stock_info_dic[symbol_id].history_data = context.all_his_data_with_min_dic[symbol_id]
 
         if symbol_id in context.all_his_data_dic.keys():
             for min_data in context.all_his_data_dic[symbol_id]:
@@ -1339,12 +1363,14 @@ def load_history_from_file(context):
         # 这里需要初始化下，当日所有标的实时数据dic
         temp_dic = {}
         context.all_cur_data_info_dic[symbol_id] = temp_dic
+        context.all_stock_info_dic[symbol_id].today_data = context.all_cur_data_info_dic[symbol_id]
 
         # 这里初始化，灵活时间的数据，时间从开始一直初始化到结束 09:25-15:00
         # 注意！！这里需要一个写一个方法，来判断实时数据中，当前分钟数，是属于哪一段灵活时间
         # 这里在context中添加一个dic以及一个index，来快速判断当前时间是属于哪一段灵活时间，避免后续大量实时数据来的时候每一次都需要判断  estimate_index - estimate_dic
         temp_agility_dic = {}
         context.all_agility_data_info_dic[symbol_id] = temp_agility_dic
+        context.all_stock_info_dic[symbol_id].today_agility_data = context.all_agility_data_info_dic[symbol_id]
 
         init_agilit_dictionary(context, symbol_id)
 
@@ -1882,6 +1908,7 @@ def translate_data_calculate_percent(context, symbol, percent, eob):
     symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
 
     #4-4 int32
+    print(f"percent:{percent}")
     temp_percent_arr = str(percent).split(".")
     temp_percent_1 = int(temp_percent_arr[0])
     temp_percent_2 = int(temp_percent_arr[1])
@@ -2331,6 +2358,7 @@ class ReciveClientThreadC(threading.Thread):
         
         return str_tmp
         
+    # 接收快速买入
     def socket_receive_quick_buy(self):
         quick_buy_id = self.client_socket.recv(4)
         quick_buy_amount = self.client_socket.recv(2)
@@ -2357,6 +2385,7 @@ class ReciveClientThreadC(threading.Thread):
             self.context.pre_quick_buy_dict[str_symbol] = TargetInfo()
         self.context.pre_quick_buy_dict[str_symbol].pre_quick_buy_amount = buy_amount * 10000
         
+    # 接收快速卖出
     def socket_receive_quick_sell(self):
         quick_sell_id = self.client_socket.recv(4)
         buy_id = int.from_bytes(quick_sell_id, byteorder='big')
@@ -2370,6 +2399,33 @@ class ReciveClientThreadC(threading.Thread):
         # 没有初始化的话，就先初始化，将要买入的目标记录到列表中，待下次tick激活处理
         if str_symbol not in self.context.pre_quick_sell_dict.keys():
             self.context.pre_quick_sell_dict[str_symbol] = TargetInfo()
+
+    # 接收处于搜索中的标的id
+    def socket_receive_select_stock(self):
+        receive_symbol_bytes = self.client_socket.recv(4)
+        buy_id = int.from_bytes(receive_symbol_bytes, byteorder='big')
+        str_symbol = self.change_stock_int_to_string(buy_id)
+
+        print(f"str_symbol::{str_symbol}")
+
+        self.context.refresh_select_stock_arr.clear()
+        self.context.refresh_select_stock_arr.append(str_symbol)
+
+    # 接收处于置顶中的标的id
+    def socket_receive_top_stock(self):
+        receive_symbol_bytes = self.client_socket.recv(4)
+        buy_id = int.from_bytes(receive_symbol_bytes, byteorder='big')
+        str_symbol = self.change_stock_int_to_string(buy_id)
+
+        print(f"str_symbol::{str_symbol}")
+
+        if str_symbol not in self.context.top_stock_arr:
+            # 添加进置顶集合
+            self.context.top_stock_arr.append(str_symbol)
+        else:
+            # 取消该标的置顶
+            self.context.top_stock_arr.remove(str_symbol)
+
 
     def run(self):
         #主动停止线程while not self._stop_event.is_set():
@@ -2407,17 +2463,22 @@ class ReciveClientThreadC(threading.Thread):
                     #客户端初始化完成，可以开始发送数据
                     elif self.context.operation_id_recive == 103:
                         self.context.client_init_complete_dic[self.client_socket] = True
-                        
+                    #快速买
                     elif self.context.operation_id_recive == OP_ID_C2S_QUICK_BUY:
                         self.socket_receive_quick_buy()
-                        
+                    #快速卖
                     elif self.context.operation_id_recive == OP_ID_C2S_QUICK_SELL:
                         self.socket_receive_quick_sell()
-                        
                     #心跳测试，防止中午时段socket断开
                     elif self.context.operation_id_recive == 900:
                         # print(f"this is heartbeat")
                         pass
+                    #接收处于搜索中的标的id
+                    elif self.context.operation_id_recive == OP_ID_C2S_SELECT_STOCK_SHOW:
+                        self.socket_receive_select_stock()
+                    #接收处于置顶中的标的id
+                    elif self.context.operation_id_recive == OP_ID_C2S_TOP_STOCK_SHOW:
+                        self.socket_receive_top_stock()
                     #未注册的MAC地址，直接关闭socket以及接收thread
                     else:
                         print(f"{self.client_socket}:this is no recognition MAC, close socket!!!")
