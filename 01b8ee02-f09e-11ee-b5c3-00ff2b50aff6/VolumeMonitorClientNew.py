@@ -20,6 +20,7 @@ OP_ID_S2C_REAL_TIME_DATA_SEND = 102 # 实时数据刷新
 OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时，当日历史数据
 OP_ID_S2C_MIN_REAL_TIME_DATA_SEND = 105 # 新版,当前分钟实时数据
 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
+OP_ID_S2C_PERCENT_TODAY_DATA_SEND = 107 # 新版，中途或者关盘后开启，当日次时段之前的对比数据
 
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
@@ -646,7 +647,7 @@ class TestClientUI(QMainWindow):
         if symbol in self.top_stock_arr:
             # 获得该标的所在集合的下标，方便在置顶中有个小排序
             temp_minus_count = self.top_stock_arr.index(symbol)
-            temp_top_amount = 100000 - temp_minus_count
+            temp_top_amount = 1000000 - temp_minus_count
             self.order_widget_dic[symbol] = temp_top_amount
         else:
             # 赋予当前数据，让其回到原有位置
@@ -655,7 +656,6 @@ class TestClientUI(QMainWindow):
             temp_now_time = ""
             # 需要先判断是否处于关盘时间
             if now_time >= self.datetime_noon_time_s and now_time < self.datetime_noon_time_e:
-        # 因为下面分钟数会+1，所以这里少设置1分钟
                 temp_now_time = "11:29:00"
             elif now_time >= self.datetime_afternoon_time_s:
                 temp_now_time = "14:59:00"
@@ -665,7 +665,7 @@ class TestClientUI(QMainWindow):
                 temp_now_time_arr = str(now_time).split(":")
                 temp_now_time = temp_now_time_arr[0] + ":" + temp_now_time_arr[1] + ":"  + "00"
             calculate_percent = self.all_stock_all_time_info[symbol].all_agility_percent[self.estimate_dic[temp_now_time]]
-            self.order_widget_dic[symbol] = calculate_percent
+            self.order_widget_dic[symbol] = float(calculate_percent)
 
         # 重新排序
         sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
@@ -1709,6 +1709,13 @@ class TestClientUI(QMainWindow):
             for temp_symbol in self.symbol_arr:
                 self.order_widget_dic[temp_symbol] = float(self.all_stock_all_time_info[temp_symbol].all_agility_percent[self.estimate_dic[eob]])
 
+            # 将需要置顶得标的，赋予一个较大得值
+            for top_symbol in self.top_stock_arr:
+                # 获得该标的所在集合的下标，方便在置顶中有个小排序
+                temp_minus_count = self.top_stock_arr.index(top_symbol)
+                temp_top_amount = 1000000 - temp_minus_count
+                self.order_widget_dic[top_symbol] = temp_top_amount
+
             sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
 
             find_target_symbol_index = 0
@@ -1727,18 +1734,6 @@ class TestClientUI(QMainWindow):
             remove_widget = None
 
             for child_widget in self.child_widget_arr:
-
-                # for key, val in child_widget.stock_widget_dic.items():
-                #     # 先移除widget，用于后面重新添加排序后得内容
-                #     # 暂时注释掉，更改为插入式排序
-                #     # child_widget.bottom_update_widget_layout.removeWidget(val.widget)
-                #     if key == symbol:
-                #         remove_widget = child_widget.stock_widget_dic[key].widget
-                #         remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
-
-                #         child_widget.bottom_update_widget_layout.takeAt(remove_index)
-                #         child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
-                #         break
 
                 # 找到该标的widget
                 remove_widget = child_widget.stock_widget_dic[symbol].widget
@@ -1800,7 +1795,12 @@ class TestClientUI(QMainWindow):
             # 先判断一下是否第一次进来
             if self.all_stock_all_time_info[symbol].last_agility_refresh_eob != "":
                 temp_last_eob = self.all_stock_all_time_info[symbol].last_agility_refresh_eob
-                self.update_w5_label(symbol, self.all_stock_all_time_info[symbol].all_agility_percent[temp_last_eob], temp_last_eob)
+                # 这里需要判断一下置顶中的标的，如果置顶的标的没有达到要求，则不添加进w5
+                # 这里达标，后续可能需要改成动态可设置，并且向服务器主动发送达标要求，要求变动服务器和客户端都需要做更改！！
+                if symbol not in self.top_stock_arr:
+                    self.update_w5_label(symbol, self.all_stock_all_time_info[symbol].all_agility_percent[temp_last_eob], temp_last_eob)
+                elif float(self.all_stock_all_time_info[symbol].all_agility_percent[temp_last_eob]) >= 800:
+                    self.update_w5_label(symbol, self.all_stock_all_time_info[symbol].all_agility_percent[temp_last_eob], temp_last_eob)
             self.all_stock_all_time_info[symbol].last_agility_refresh_eob = eob
 
         self.all_stock_all_time_info[symbol].refresh_agility_label.setText(f'{eob}\n{percent}%')
@@ -1811,12 +1811,18 @@ class TestClientUI(QMainWindow):
         # self.order_widget_dic[symbol] = percent
         self.order_label(symbol, eob)
 
+        # label上色，虽然暂时没有必要，孙哥喜欢就添加吧！
+        if float(percent) > 800:
+            self.all_stock_all_time_info[symbol].refresh_agility_label.setStyleSheet('QLabel { color: red; }')  
+        else:
+            self.all_stock_all_time_info[symbol].refresh_agility_label.setStyleSheet('QLabel { color: green; }') 
 
     # 更新w5-label
     def update_w5_label(self, symbol, percent, eob):
 
         if eob not in self.w5.stock_time_labelinfo_dic[symbol].keys():
             data_label = self.create_label_with_percent(eob, percent, self.w5.stock_widget_dic[symbol].widget)
+            data_label.setStyleSheet('QLabel { color: red; }')  
 
             stock_info = StockTimeLbelInfo(data_label, percent, eob)
             self.w5.stock_time_labelinfo_dic[symbol][eob] = stock_info
