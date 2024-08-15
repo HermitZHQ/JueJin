@@ -27,11 +27,12 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
-self_server_port = 12346 #正式服12345, 调试服12346
+self_server_port = 12346 #正式服12345, 调试服12346, 天翼云测试12347
 
-SECTION_HISTORY_STOCK_COUNT = 50
+SECTION_HISTORY_STOCK_COUNT = 100
 HISTORY_DATA_SEND_COUNT = 50
 HISTORY_TODAY_DATA_SEND_COUNT = 50
+HALFWAY_AGILITY_DATA_SEND_COUNT = 50
 
 OP_ID_S2C_STOCK_NAME_SEND = 100 # 客户端初始化时，标的代码及其名称
 OP_ID_S2C_HISTORY_DATA_SEND = 101 # 客户端初始化时，历史数据
@@ -39,6 +40,7 @@ OP_ID_S2C_REAL_TIME_DATA_SEND = 102 # 实时数据刷新
 OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时，当日历史数据
 OP_ID_S2C_MIN_REAL_TIME_DATA_SEND = 105 # 新版,当前分钟实时数据
 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
+OP_ID_S2C_PERCENT_TODAY_DATA_SEND = 107 # 新版，中途或者关盘后开启，当日次时段之前的对比数据
 
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
@@ -51,7 +53,6 @@ OP_ID_C2S_TOP_STOCK_SHOW = 131 # 处于置顶中标的，且没有达标的标�
 
 def VolumeMonitorDebug():
     pass
-
 
 class DataLimitToSend:
     def __init__(self):
@@ -163,6 +164,7 @@ def init(context):
     context.his_25_today_amount_data = []
     context.refresh_select_stock_arr = [] # 发送在此集合中的标的信息，如果没达标则发送，达标就不管了
     context.top_stock_arr = [] # 置顶标的集合
+    context.halfway_agility_data_for_send_arr = [] # 中途开启时或关盘后开启，用于发送此dic中的灵活时间达标数据, arr<{"symbol", "percent", "eob"}>
 
     context.symbol_arr = {}
     context.his_symbol_data_arr = set()
@@ -238,7 +240,7 @@ def init(context):
     # init_client_one_time(context)
 
     # 测试新版-服务器运算
-    # init_client_stork(context)
+    init_client_stork(context)
     
     # 测试获得当日历史数据
     # load_ids(context)
@@ -600,6 +602,51 @@ def init_client_one_time(context):
             # 关盘后，模拟on_bar用,用这个
             # simulation_on_bar(context)
 
+# 初始化中，当中途开启或者关盘后开启，发送已有数据 
+def init_send_halfway_agility_data(context, client_socket):
+    #1-4 int32 包头
+    #OP_ID_S2C_PERCENT_TODAY_DATA_SEND
+    
+    #2-4 int32 历史数据数量总数
+    history_today_data_count = len(context.halfway_agility_data_for_send_arr)
+    history_today_data_count_bytes = history_today_data_count.to_bytes(4, byteorder="big")
+
+    ready_send_today_data_bytes = OP_ID_S2C_PERCENT_TODAY_DATA_SEND.to_bytes(4, byteorder="big") + history_today_data_count_bytes
+
+     #先发送包头+数据总数
+    client_socket.sendall(ready_send_today_data_bytes)    
+
+    arrive_index_for_send = 0
+    residue_data_count = history_today_data_count
+    #这里要判断一下，当dic中数据总数小于HALFWAY_AGILITY_DATA_SEND_COUNT时，这里又可能用不上，但还是加上吧
+    if history_today_data_count < HALFWAY_AGILITY_DATA_SEND_COUNT:
+        temp_send_count = history_today_data_count
+    else:
+        temp_send_count = HALFWAY_AGILITY_DATA_SEND_COUNT
+    ready_send_today_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
+
+    #拼接待发送的数据，byte类型
+    for valume in context.halfway_agility_data_for_send_arr:
+        # print(f"{valume['symbol']}:{valume['amount']}:{valume['eob']}")
+        history_data_bytes = translate_data_calculate_percent(context, valume['symbol'], valume['percent'], valume['eob'])
+        # sned_data_bytes = translate_data_calculate_percent(context, s_symbol, s_percent, s_eob)
+        ready_send_today_data_bytes += history_data_bytes
+
+        arrive_index_for_send += 1
+        #达到发送的数量时，发送
+        if arrive_index_for_send == temp_send_count:
+            client_socket.sendall(ready_send_today_data_bytes)
+            residue_data_count -= arrive_index_for_send
+            arrive_index_for_send = 0
+
+            if residue_data_count > HISTORY_TODAY_DATA_SEND_COUNT:
+                temp_send_count = HISTORY_TODAY_DATA_SEND_COUNT
+            else:
+                temp_send_count = residue_data_count
+
+            ready_send_today_data_bytes = temp_send_count.to_bytes(4, byteorder="big")
+            
+            time.sleep(0.002)
 
 
 # 这里开始大改，将改为服务器运算
@@ -662,6 +709,19 @@ def init_client_stork(context):
                             #这里传输标的代码及名字时，等待一下，看看是否还会报错
                             time.sleep(0.002)
                         #==========================================
+                        # 这里添加中途开启功能 OP_ID_S2C_PERCENT_TODAY_DATA_SEND
+
+                        for symbol_val in  context.all_agility_data_info_dic.values():
+                            for s_v in symbol_val.values():
+                                # print(f"{s_v.symbol}::{s_v.agility_time}:{s_v.history_amount}:{s_v.current_amount}")
+                                temp_agility_percent = calculate_percent_mathod(s_v.history_amount, s_v.current_amount)
+                                if int(temp_agility_percent) >= context.data_limit_to_send.agility_limit:
+                                    # 将中途开启并且达标的数据存入准备发送的arr中
+                                    context.halfway_agility_data_for_send_arr.append({"symbol":s_v.symbol, "percent":temp_agility_percent, "eob":s_v.agility_time})
+
+                        # 发送中途开启后的灵活时间数据
+                        init_send_halfway_agility_data(context, client_socket)
+
 
                         val.is_init = True
                         val.is_initing = False
@@ -1283,6 +1343,7 @@ def init_agilit_dictionary(context, symbol_id):
                 temp_agilityinfo.current_amount = 0.0
                 temp_agilityinfo.history_amount = agility_amount
 
+                # 初始化agility_amount,并赋值
                 context.all_agility_data_info_dic[symbol_id][temp_his_begin_time] = temp_agilityinfo
 
                 temp_time_index = 0
@@ -1370,6 +1431,7 @@ def load_history_from_file(context):
         # 这里在context中添加一个dic以及一个index，来快速判断当前时间是属于哪一段灵活时间，避免后续大量实时数据来的时候每一次都需要判断  estimate_index - estimate_dic
         temp_agility_dic = {}
         context.all_agility_data_info_dic[symbol_id] = temp_agility_dic
+        # 这错了，没有today_agility_data这个属性！！后面来改
         context.all_stock_info_dic[symbol_id].today_agility_data = context.all_agility_data_info_dic[symbol_id]
 
         init_agilit_dictionary(context, symbol_id)
@@ -1442,24 +1504,78 @@ def test_get_data(context):
 
     print(f"context.his_data length::{len(context.his_data)}")
 
+def find_agility_time(context, eob):
+
+    temp_time_arr = resolve_time_minute(str(eob))
+
+    if temp_time_arr[2] != "00":
+        temp_time_arr[2] = "00"
+
+    temp_time = temp_time_arr[0] + ":" + temp_time_arr[1] + ":" + temp_time_arr[2]
+
+    agility_time = context.estimate_dic[temp_time]
+
+    return agility_time
+
 # 中途开启时，初始化cud_dic和agility_dic
 def init_min_and_agility_dic(context):
     #将今天的25min数据装入dic
     for his_today_25_val in context.his_25_today_amount_data:
         context.all_cur_data_info_dic[his_today_25_val['symbol']]['09:25:00'] =  his_today_25_val['last_amount']
+        agility_time = find_agility_time(context, 'xx 09:25:00+8:00')
+        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount = his_today_25_val['last_amount']
     #将没有数据的标的，赋予0.0值
     for notin_today_25_val in context.notin_25_today_stock_arr:
         context.all_cur_data_info_dic[notin_today_25_val]['09:25:00'] =  0.0
+        agility_time = find_agility_time(context, 'xx 09:25:00+8:00')
+        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount = 0.0
     #打包今日此时段之前的历史数据
     for his_today_val in context.his_data_for_today:
         temp_time_arr = resolve_time_minute(str(his_today_val['eob']))
         temp_time = temp_time_arr[0] + ":" + temp_time_arr[1] + ":" + temp_time_arr[2]
 
         # 初始化cur_dic
-        context.all_cur_data_info_dic[his_today_25_val['symbol']][temp_time] =  his_today_val['amount']
+        context.all_cur_data_info_dic[his_today_val['symbol']][temp_time] =  his_today_val['amount']
         # 初始化agility_dic
-        agility_time = context.estimate_dic[temp_time]
-        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount += his_today_val['amount']
+        agility_time = find_agility_time(context, str(his_today_val['eob']))
+        context.all_agility_data_info_dic[his_today_val['symbol']][agility_time].current_amount += his_today_val['amount']
+
+        # print(f"{his_today_val['symbol']}|{str(his_today_val['eob'])}|{his_today_val['amount']}")
+
+    # 正常时段分钟数+1
+    # 取出当前second时间
+    temp_time_arr = []
+    for his_today_second_val in context.ready_second_for_send:
+        # print(f"{str(his_today_second_val['eob'])}")
+        temp_time_arr = resolve_time_minute(str(his_today_second_val['eob']))
+        break
+
+    temp_hour = temp_time_arr[0]
+    temp_min = temp_time_arr[1]
+
+    temp_next_min = int(temp_min) + 1
+    # 这里需要判断当前分钟是否为个位数，如果是就会与key匹配不上，例如10:9:00-对应应该是10:09:00
+    if len(str(temp_next_min)) == 1:
+        temp_min = '0' + str(temp_next_min)
+    else:
+        temp_min = str(temp_next_min)
+    # 这里需要判断当前分钟是否满了60，如果满了60，小时就需要+1，并且将当前分钟数重置为00
+    if temp_min == '60':
+        temp_hour = str(int(temp_hour) + 1)
+        temp_min = '00'
+
+    cur_tick_time = temp_hour + ":" + temp_min + ":" + "00"
+
+    #打包今日当前分钟内的历史数据, ！！好像有点问题，暂时保留！！
+    for his_today_second_val in context.ready_second_for_send:
+        # temp_time_arr = resolve_time_minute(str(his_today_second_val['eob']))
+        # temp_time = temp_time_arr[0] + ":" + temp_time_arr[1] + ":" + "00"
+
+        # 初始化cur_dic
+        context.all_cur_data_info_dic[his_today_second_val['symbol']][cur_tick_time] = his_today_second_val['amount']
+        # 初始化agility_dic
+        agility_time = find_agility_time(context, "xx " + cur_tick_time + ".001+08:00") # 补全分解格式
+        context.all_agility_data_info_dic[his_today_second_val['symbol']][agility_time].current_amount += his_today_second_val['amount']
 
     # for s_id, s_val in context.all_agility_data_info_dic.items():
     #     for agility_key, agility_value in s_val.items():
@@ -1486,8 +1602,9 @@ def get_history_data_in_today(context):
     print(f"time::{get_now_hour}:{get_now_min}:{get_now_second_without_dot}")
     
     #关盘时间外测试用===========
-    if int(get_now_hour) > 15:
+    if int(get_now_hour) >= 15:
         get_now_hour = 14
+        get_now_min = "59"
     elif int(get_now_hour) < 9:
         get_now_hour = 9
     #==========================
@@ -1685,7 +1802,10 @@ def get_history_data_in_today(context):
                 temp_total_valume += float(item['last_amount'])
                 temp_second_time = str(item['created_at'])
         context.temp_total_second_data[item_symbol] = temp_total_valume
-        context.ready_second_for_send.append(PackHistoryDataFrame(item_symbol, temp_total_valume, temp_second_time, 'his_today_data').to_dict())
+        # 下面这句是用于老版本
+        # context.ready_second_for_send.append(PackHistoryDataFrame(item_symbol, temp_total_valume, temp_second_time, 'his_today_data').to_dict())
+        # 新版本, ready_second_for_send 先将就这个arr使用，后面需要更改再改
+        context.ready_second_for_send.append({"symbol":item_symbol, "amount":temp_total_valume, "eob":temp_second_time})
 
     # for key, value in context.temp_total_second_data.items():
     #     print(f"{key}:::{value}")
@@ -1908,7 +2028,6 @@ def translate_data_calculate_percent(context, symbol, percent, eob):
     symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
 
     #4-4 int32
-    print(f"percent:{percent}")
     temp_percent_arr = str(percent).split(".")
     temp_percent_1 = int(temp_percent_arr[0])
     temp_percent_2 = int(temp_percent_arr[1])
