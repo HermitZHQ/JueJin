@@ -647,7 +647,7 @@ class TestClientUI(QMainWindow):
         if symbol in self.top_stock_arr:
             # 获得该标的所在集合的下标，方便在置顶中有个小排序
             temp_minus_count = self.top_stock_arr.index(symbol)
-            temp_top_amount = 1000000 - temp_minus_count
+            temp_top_amount = 9999999 - temp_minus_count
             self.order_widget_dic[symbol] = temp_top_amount
         else:
             # 赋予当前数据，让其回到原有位置
@@ -868,7 +868,7 @@ class TestClientUI(QMainWindow):
 
             self.order_widget_dic[item] = 0.0
 
-            print(f"{item}")
+            # print(f"{item}")
 
             self.simple_stock_with_stock[item[-6:]] = item
             # 初始化排序dic OderStockState()
@@ -1713,7 +1713,7 @@ class TestClientUI(QMainWindow):
             for top_symbol in self.top_stock_arr:
                 # 获得该标的所在集合的下标，方便在置顶中有个小排序
                 temp_minus_count = self.top_stock_arr.index(top_symbol)
-                temp_top_amount = 1000000 - temp_minus_count
+                temp_top_amount = 9999999 - temp_minus_count
                 self.order_widget_dic[top_symbol] = temp_top_amount
 
             sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
@@ -2205,7 +2205,84 @@ class ReciveQThread(QThread):
                 elif operation_id == OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND:
                     self.refresh_data_106()
 
+                #中途或者关盘后开启，接收初始化数据
+                elif operation_id == OP_ID_S2C_PERCENT_TODAY_DATA_SEND:
+                    self.init_receive_halfway_agility_data_107()
+
+
+    # 中途或者关盘后开启，接收初始化数据, OP_ID_S2C_PERCENT_TODAY_DATA_SEND--107
+    def init_receive_halfway_agility_data_107(self):
+        # 2-4 int32
+        history_data_count_bytes = self.client_socket.recv(4)
+        history_data_count = int.from_bytes(history_data_count_bytes, byteorder='big')
+        print(f"history_data_count::{history_data_count}")
+
+        had_recive_count = 0
+
+        #这个接收循环是有问题的，应该不是这样接收的
+        for i in range(history_data_count):
+            history_recive_count_bytes = self.client_socket.recv(4)
+            history_recive_count = int.from_bytes(history_recive_count_bytes, byteorder='big')
+
+            for n in range(history_recive_count):
+                #2-4 int32
+                symbol_letter_bytes = self.client_socket.recv(4)
+                symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+                symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+
+                #3-4 int32
+                symbol_num_bytes = self.client_socket.recv(4)
+                symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+                #___这里需要补全标的代码前面的0
+                if len(symbol_num) < 6:
+                    need_complement = 6 - len(symbol_num)
+                    for i in range(need_complement):
+                        i += 1
+                        symbol_num = '0' + symbol_num
+
+                #4-4 int32
+                percent_1_bytes = self.client_socket.recv(4)
+                percent_1 = str(int.from_bytes(percent_1_bytes, byteorder='big'))
+
+                #5-4 int32
+                percent_2_bytes = self.client_socket.recv(4)
+                percent_2 = str(int.from_bytes(percent_2_bytes, byteorder='big'))
+
+                #6-4 int32
+                eob_time_bytes = self.client_socket.recv(4)
+                eob_time_str = str(int.from_bytes(eob_time_bytes, byteorder='big'))
+                eob_time = self.re_complement_time_new(eob_time_str)
+
+                symbol = symbol_letter + '.' + symbol_num
+                percent = percent_1 + '.' + percent_2
+
+                # print(f"{symbol}:{percent}:{eob_time}")
+
+                main_window.temp_wait_for_update_dic["w4"].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
+
+            had_recive_count += history_recive_count
+            if had_recive_count == history_data_count:
+                break
+
+
+        #当数据来时，UI还在更新，则添加先添加到等待集合里
+        if main_window.is_in_updating == False:
+
+            #将临时存放等待刷新的数据集合给准备刷新的集合
+            for item in main_window.temp_wait_for_update_dic["w4"]:
+                temp_item = item
+                main_window.wait_for_update_dic["w4"].append(temp_item)    
+
+            #清空临时list,准备接新的数据
+            main_window.temp_wait_for_update_dic["w4"].clear()
+
+            main_window.is_in_updating = True
+
+            main_window.is_refresh_new_data = True
+            main_window.has_refresh_data_single.emit(main_window.is_refresh_new_data)
+            main_window.is_refresh_new_data = False
     
+
     # 封装 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND--106，当前分钟达标数据刷新
     def refresh_data_106(self):
         #2-4 int32
