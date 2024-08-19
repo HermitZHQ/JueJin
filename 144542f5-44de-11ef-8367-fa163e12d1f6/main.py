@@ -17,7 +17,7 @@ import math
 import sys 
 
 global_i = 0
-str_strategy = 'VDebug'
+str_strategy = 'VDebug' # V--VDebug
 str_load_history = 'AllHistoryInfo'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path_a1 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A1.txt'
@@ -1126,11 +1126,6 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
         send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
 
 
-    # 测试用
-    # if int(min_percent) >= 1000:
-    #     print(f"test")
-
-
 def on_tick(context, tick):
 
     # return
@@ -1293,7 +1288,6 @@ def init_agilit_dictionary(context, symbol_id):
 
     is_estimate_init = False
     temp_estimate_arr = []
-    #context.estimate_dic
 
     for i in range(2):
 
@@ -1372,6 +1366,10 @@ def init_agilit_dictionary(context, symbol_id):
     # for key, value in context.estimate_dic.items():
     #     print(f"{key}-{value}")
 
+    # for p_value in context.all_agility_data_info_dic.values():
+    #     for c_key, c_val in p_value.items():
+    #         print(f"{c_key}|{c_val.agility_time}|{c_val.current_amount}|{c_val.history_amount}")
+
 
 
 #从文件中获取历史数据，其中包括了集合进价
@@ -1426,7 +1424,7 @@ def load_history_from_file(context):
         context.all_cur_data_info_dic[symbol_id] = temp_dic
         context.all_stock_info_dic[symbol_id].today_data = context.all_cur_data_info_dic[symbol_id]
 
-        # 这里初始化，灵活时间的数据，时间从开始一直初始化到结束 09:25-15:00
+        # 这里初始化，灵活时间的数据，时间从开始一直初始化到结束 09:16-15:00
         # 注意！！这里需要一个写一个方法，来判断实时数据中，当前分钟数，是属于哪一段灵活时间
         # 这里在context中添加一个dic以及一个index，来快速判断当前时间是属于哪一段灵活时间，避免后续大量实时数据来的时候每一次都需要判断  estimate_index - estimate_dic
         temp_agility_dic = {}
@@ -1523,12 +1521,12 @@ def init_min_and_agility_dic(context):
     for his_today_25_val in context.his_25_today_amount_data:
         context.all_cur_data_info_dic[his_today_25_val['symbol']]['09:25:00'] =  his_today_25_val['last_amount']
         agility_time = find_agility_time(context, 'xx 09:25:00+8:00')
-        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount = his_today_25_val['last_amount']
+        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount = his_today_25_val['last_amount']# agility_time -- '09:25:00'
     #将没有数据的标的，赋予0.0值
     for notin_today_25_val in context.notin_25_today_stock_arr:
         context.all_cur_data_info_dic[notin_today_25_val]['09:25:00'] =  0.0
         agility_time = find_agility_time(context, 'xx 09:25:00+8:00')
-        context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount = 0.0
+        context.all_agility_data_info_dic[notin_today_25_val][agility_time].current_amount = 0.0 # agility_time -- '09:25:00'
     #打包今日此时段之前的历史数据
     for his_today_val in context.his_data_for_today:
         temp_time_arr = resolve_time_minute(str(his_today_val['eob']))
@@ -1543,43 +1541,47 @@ def init_min_and_agility_dic(context):
         # print(f"{his_today_val['symbol']}|{str(his_today_val['eob'])}|{his_today_val['amount']}")
 
     # 正常时段分钟数+1
-    # 取出当前second时间
-    temp_time_arr = []
-    for his_today_second_val in context.ready_second_for_send:
-        # print(f"{str(his_today_second_val['eob'])}")
-        temp_time_arr = resolve_time_minute(str(his_today_second_val['eob']))
-        break
+    # 取出当前second时间,添加一个判断，不然后面肯定会报错
+    if len(context.ready_second_for_send) > 0:
+        temp_time_arr = []
+        for his_today_second_val in context.ready_second_for_send:
+            # print(f"!!!{str(his_today_second_val['eob'])}")
+            if his_today_second_val['eob'] != None:
+                temp_time_arr = resolve_time_minute(str(his_today_second_val['eob']))
+                break
 
-    temp_hour = temp_time_arr[0]
-    temp_min = temp_time_arr[1]
+        if his_today_second_val['eob'] != None and len(temp_time_arr) != 0:
 
-    temp_next_min = int(temp_min) + 1
-    # 这里需要判断当前分钟是否为个位数，如果是就会与key匹配不上，例如10:9:00-对应应该是10:09:00
-    if len(str(temp_next_min)) == 1:
-        temp_min = '0' + str(temp_next_min)
-    else:
-        temp_min = str(temp_next_min)
-    # 这里需要判断当前分钟是否满了60，如果满了60，小时就需要+1，并且将当前分钟数重置为00
-    if temp_min == '60':
-        temp_hour = str(int(temp_hour) + 1)
-        temp_min = '00'
+            temp_hour = temp_time_arr[0]
+            temp_min = temp_time_arr[1]
 
-    cur_tick_time = temp_hour + ":" + temp_min + ":" + "00"
+            temp_next_min = int(temp_min) + 1
+            # 这里需要判断当前分钟是否为个位数，如果是就会与key匹配不上，例如10:9:00-对应应该是10:09:00
+            if len(str(temp_next_min)) == 1:
+                temp_min = '0' + str(temp_next_min)
+            else:
+                temp_min = str(temp_next_min)
+            # 这里需要判断当前分钟是否满了60，如果满了60，小时就需要+1，并且将当前分钟数重置为00
+            if temp_min == '60':
+                temp_hour = str(int(temp_hour) + 1)
+                temp_min = '00'
 
-    #打包今日当前分钟内的历史数据, ！！好像有点问题，暂时保留！！
-    for his_today_second_val in context.ready_second_for_send:
-        # temp_time_arr = resolve_time_minute(str(his_today_second_val['eob']))
-        # temp_time = temp_time_arr[0] + ":" + temp_time_arr[1] + ":" + "00"
+            cur_tick_time = temp_hour + ":" + temp_min + ":" + "00"
 
-        # 初始化cur_dic
-        context.all_cur_data_info_dic[his_today_second_val['symbol']][cur_tick_time] = his_today_second_val['amount']
-        # 初始化agility_dic
-        agility_time = find_agility_time(context, "xx " + cur_tick_time + ".001+08:00") # 补全分解格式
-        context.all_agility_data_info_dic[his_today_second_val['symbol']][agility_time].current_amount += his_today_second_val['amount']
+            #打包今日当前分钟内的历史数据, ！！好像有点问题，暂时保留！！
+            for his_today_second_val in context.ready_second_for_send:
+                # temp_time_arr = resolve_time_minute(str(his_today_second_val['eob']))
+                # temp_time = temp_time_arr[0] + ":" + temp_time_arr[1] + ":" + "00"
 
-    # for s_id, s_val in context.all_agility_data_info_dic.items():
-    #     for agility_key, agility_value in s_val.items():
-    #         print(f"{agility_value.symbol}|{agility_value.agility_time}|{agility_value.history_amount}|{agility_value.current_amount}") 
+                # 初始化cur_dic
+                context.all_cur_data_info_dic[his_today_second_val['symbol']][cur_tick_time] = his_today_second_val['amount']
+                # 初始化agility_dic
+                agility_time = find_agility_time(context, "xx " + cur_tick_time + ".001+08:00") # 补全分解格式
+                context.all_agility_data_info_dic[his_today_second_val['symbol']][agility_time].current_amount += his_today_second_val['amount']
+
+            # for s_id, s_val in context.all_agility_data_info_dic.items():
+            #     for agility_key, agility_value in s_val.items():
+            #         print(f"{agility_value.symbol}|{agility_value.agility_time}|{agility_value.history_amount}|{agility_value.current_amount}") 
         
 
 
@@ -1587,7 +1589,11 @@ def init_min_and_agility_dic(context):
 def get_history_data_in_today(context):
     now_data = context.now
     print(f"{now_data}")
-    print(f"{context.symbol_str}")
+    # print(f"{context.symbol_str}")
+
+    # -----测试用
+    # now_data = "2024-08-16 " + "09:15:01.001+08:00"
+    # -----测试用
     
     get_now_time_arr = str(now_data).split("+")
     get_now_time_arr_1 = get_now_time_arr[0].split(" ")
@@ -1646,6 +1652,8 @@ def get_history_data_in_today(context):
     combined = datetime.combine(now.date(), temp_translate_time)
     one_minute_early = combined - timedelta(minutes=1) 
     s_second_time = str(one_minute_early)
+
+    print(f"{s_second_time}||{e_second_time}")
 
     print(f"is stuck here 1?")
     print(f"SECTION_HISTORY_STOCK_COUNT::{SECTION_HISTORY_STOCK_COUNT}")
