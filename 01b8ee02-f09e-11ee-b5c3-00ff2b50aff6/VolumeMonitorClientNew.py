@@ -189,6 +189,8 @@ class TestClientUI(QMainWindow):
 
         # self.load_history_from_file()
 
+        
+
         self.connect_server()
 
     # 初始化该标的，所有时间段的数据(0.0)，包括灵活时间段
@@ -506,7 +508,7 @@ class TestClientUI(QMainWindow):
         self.input_box_search.returnPressed.connect(lambda: self.w1_put_on_top(self.input_box_search)) # w1_put_on_top -w1_select_stock
         self.w1.top_function_widget_layout.addWidget(self.input_box_search)
 
-        #1分钟实时数据
+        #w2-1分钟实时数据
         self.w2 = InitChildQwidGet()
         self.main_window_layout.addWidget(self.w2.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         #向数据刷新子容器添加总容器的伸缩按钮
@@ -516,22 +518,23 @@ class TestClientUI(QMainWindow):
         self.w2.up_contnet_widget_layout.addWidget(btn)
         content_label = QLabel(f'1分钟实时数据(9:25--15:30)', self.w2.up_contnet_widget)
         self.w2.up_contnet_widget_layout.addWidget(content_label)
-
         #____添加w2按钮支持急速买入
         btn_quick_buy = QPushButton(self)
         btn_quick_buy.setText("买入")
         btn_quick_buy.setFixedSize(QSize(60, 30))
         btn_quick_buy.pressed.connect(lambda: self.w1_quick_buy())
         self.w2.top_function_widget_layout.addWidget(btn_quick_buy)
-        
         #____添加w2按钮支持急速卖出
         btn_quick_sell = QPushButton(self)
         btn_quick_sell.setText("卖出")
         btn_quick_sell.setFixedSize(QSize(60, 30))
         btn_quick_sell.pressed.connect(lambda: self.w1_quick_sell())
         self.w2.top_function_widget_layout.addWidget(btn_quick_sell)
+        #____把w2设置窄点
+        self.w2.overall_widget.setFixedWidth(self.MAX_H_SIZE * 2)
+        self.w2.is_stretch = False
 
-        #1分钟达到预设次数
+        #w3-1分钟达到预设次数
         self.w3 = InitChildQwidGet()
         self.main_window_layout.addWidget(self.w3.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         btn = QPushButton('S')
@@ -541,7 +544,7 @@ class TestClientUI(QMainWindow):
         content_label = QLabel(f'1分钟达到预设值次数:{'N'}', self.w3.up_contnet_widget)
         self.w3.up_contnet_widget_layout.addWidget(content_label)
 
-        #灵活分钟刷新
+        #w4-灵活分钟刷新
         self.w4 = InitChildQwidGet()
         self.main_window_layout.addWidget(self.w4.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         btn = QPushButton('S')
@@ -550,8 +553,11 @@ class TestClientUI(QMainWindow):
         self.w4.up_contnet_widget_layout.addWidget(btn)
         content_label = QLabel(f'灵活设置分钟实时数据(9:25--15:30)', self.w4.up_contnet_widget)
         self.w4.up_contnet_widget_layout.addWidget(content_label)
+        #____把w4设置窄点
+        self.w4.overall_widget.setFixedWidth(self.MAX_H_SIZE * 2)
+        self.w4.is_stretch = False
 
-        #灵活分钟刷新，达到预设次数
+        #w5-灵活分钟刷新，达到预设次数
         self.w5 = InitChildQwidGet()
         self.main_window_layout.addWidget(self.w5.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         btn = QPushButton('S')
