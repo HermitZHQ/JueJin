@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QTextEdit, QMainWindow, QLineEdit, QScrollArea, QLabel, QHBoxLayout, QSizePolicy, QMessageBox
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QTextEdit, QMainWindow, QLineEdit, QScrollArea, QLabel, QHBoxLayout, QSizePolicy, QMessageBox, QSpacerItem
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QTimer, QObject
 from PyQt5.QtGui import QTextOption, QResizeEvent, QTextDocument
 from datetime import datetime, time, timedelta
@@ -38,7 +38,8 @@ class AllStockAllTimeInfo():
         self.refresh_agility_label = None # 灵活分钟实时刷新的label,目前w4里，只有这一个刷新Label
         self.last_min_refresh_eob = '' # 上一次分钟数刷新时间，用于判断是否该加进w5中
         self.last_agility_refresh_eob = '' # 上一次灵活分钟数刷新时间，用于判断是否该加进w5中
-        
+        self.min_percent_label_arr = [] # 分钟数达标数据label集合
+        self.agility_percent_label_arr = [] # 灵活时间达标数据label集合
 
 class OderStockState():
     def __init__(self, symbol, eob, is_order):
@@ -88,6 +89,7 @@ class TestClientUI(QMainWindow):
     has_init_window_single = pyqtSignal(bool)
     has_init_stock_name_single = pyqtSignal(bool)
     has_refresh_data_single = pyqtSignal(bool)
+    has_init_halfway_info_single = pyqtSignal(bool) # 用于中途开启，初始化中途开启数据，只存储数据以及创建label，但不添加进layout
 
     def __init__(self):  
         super().__init__()  
@@ -115,6 +117,7 @@ class TestClientUI(QMainWindow):
         self.update_scrollArea_current_time = 0
         self.update_scrollArea_last_time = 0
         self.refresh_stork_count = 40 # 设置排列于最前面的固定数量标的数据
+        self.page_show_count = 5 # 分页显示数量
         self.win_list = {}
         self.is_can_statistics = False
         self.is_can_ready_statistics = False
@@ -131,6 +134,7 @@ class TestClientUI(QMainWindow):
         self.refresh_in_stock_arr = [] # 只刷新在这个list里的标的label, 只用于判断
         self.refresh_in_select_arr = [] # 由于当单独搜索时，需要实时显示数据，添加此集合，只要此集合不为空，就会优先添加进refresh_in_stock_arr集合中
         self.top_stock_arr = [] # 置顶标的集合
+        self.page_show_symbol_arr = [] # 当前分页所该显示的标的集合
 
         self.current_data_dic = {}
         self.temp_current_data_dic = {}
@@ -160,10 +164,12 @@ class TestClientUI(QMainWindow):
         self.is_has_today_history_data = False
         self.is_in_updating = False
         self.is_complate_all_init = False
-        self.is_init_window = False #信号，初始UI相关容器
-        self.is_init_window_stork_name = False #新版，信号，初始化标的代码，名称，以及相关w1--6相关容器
-        self.is_w2_refresh = False #控制每分钟数据是否显示
-        self.is_w6_refresh = False #控制当日所有数据是否显示
+        self.is_init_window = False # 信号，初始UI相关容器
+        self.is_init_window_stork_name = False # 新版，信号，初始化标的代码，名称，以及相关w1--6相关容器
+        self.is_w2_refresh = False # 控制每分钟数据是否显示
+        self.is_w6_refresh = False # 控制当日所有数据是否显示
+        self.is_init_halfway_info_single = False # 信号，初始化中途开启相关信息
+
         self.server_port = 12346 #正式服12345, 调试服12346, 天翼云测试12347
 
         self.test_index = 0
@@ -186,11 +192,11 @@ class TestClientUI(QMainWindow):
         self.has_init_window_single.connect(self.init_window)
         self.has_init_stock_name_single.connect(self.init_window_stork_name)
         self.has_refresh_data_single.connect(self.update_label_for_single_new)
+        self.has_init_halfway_info_single.connect(self.init_halfway_info_single)
 
         # self.load_history_from_file()
 
-        
-
+        # UI调整时，可以注释掉这里，不会有太多影响
         self.connect_server()
 
     # 初始化该标的，所有时间段的数据(0.0)，包括灵活时间段
@@ -489,20 +495,44 @@ class TestClientUI(QMainWindow):
     #初始化所有容器
     def init_widget(self):
 
-        #主容器
+        # 由于分页的改动，需要将这里的主容器更换vertical的layout
+        # 总容器-vertical_layout
+        # self.overall_main_window = QWidget()
+        # self.setCentralWidget(self.overall_main_window)
+        # self.overall_main_window_layout = QVBoxLayout(self.overall_main_window)
+        # self.overall_main_window_layout.setSpacing(0)
+
+        #主容器--更改为内容显示主容器
         self.main_window = QWidget()
         self.setCentralWidget(self.main_window)
-        self.main_window_layout = QHBoxLayout(self.main_window)
+        self.main_window_layout = QVBoxLayout(self.main_window) # QHBoxLayout -- QVBoxLayout
         self.main_window_layout.setSpacing(0)
+        # self.main_window_layout.addWidget(self.w1.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft) # 这一句好像重复添加了，先注释，没问题再删掉
+
+        # 先将主容器更改为垂直排序，再添加2个widget(也可以添加3个，分的再细点的话)
+        # 上面为主内容容器，下面为翻页容器
+        self.content_widget = QWidget()
+        self.content_widget_layout = QHBoxLayout(self.content_widget)
+        self.content_widget_layout.setSpacing(0)
+        # self.content_widget.setFixedHeight(100)
+        # self.main_window_layout.addWidget(self.content_widget, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self.main_window_layout.addWidget(self.content_widget)
+
+        # 下方翻页按钮容器
+        self.init_page_widget()
 
         #标的代码与名称
         self.w1 = InitChildQwidGet()
         self.w1.overall_widget.setFixedWidth(self.MAX_H_SIZE * 3)
-        self.main_window_layout.addWidget(self.w1.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self.main_window_layout.addWidget(self.w1.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.content_widget_layout.addWidget(self.w1.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         stock_label = QLabel(f'标的代码', self.w1.up_contnet_widget)
         self.w1.up_contnet_widget_layout.addWidget(stock_label)
         name_label = QLabel(f'名称', self.w1.up_contnet_widget)
         self.w1.up_contnet_widget_layout.addWidget(name_label)
+        #____这里单独为w1创建一个dic用来装标的代码label和名称label，dic<stock_id,dic<stock_label:Label, name_label:Lbael>>
+        self.w1.stock_name_label_dic = {}
+
         #____添加w1里最上方的功能模块
         self.input_box_search = QLineEdit(self)
         self.input_box_search.returnPressed.connect(lambda: self.w1_put_on_top(self.input_box_search)) # w1_put_on_top -w1_select_stock
@@ -510,7 +540,8 @@ class TestClientUI(QMainWindow):
 
         #w2-1分钟实时数据
         self.w2 = InitChildQwidGet()
-        self.main_window_layout.addWidget(self.w2.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self.main_window_layout.addWidget(self.w2.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.content_widget_layout.addWidget(self.w2.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         #向数据刷新子容器添加总容器的伸缩按钮
         btn = QPushButton('S')
         btn.setFixedSize(20,20)
@@ -536,7 +567,8 @@ class TestClientUI(QMainWindow):
 
         #w3-1分钟达到预设次数
         self.w3 = InitChildQwidGet()
-        self.main_window_layout.addWidget(self.w3.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self.main_window_layout.addWidget(self.w3.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.content_widget_layout.addWidget(self.w3.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         btn = QPushButton('S')
         btn.setFixedSize(20,20)
         btn.clicked.connect(lambda: self.on_click_data_update_stretch(self.w3))
@@ -546,7 +578,8 @@ class TestClientUI(QMainWindow):
 
         #w4-灵活分钟刷新
         self.w4 = InitChildQwidGet()
-        self.main_window_layout.addWidget(self.w4.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self.main_window_layout.addWidget(self.w4.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.content_widget_layout.addWidget(self.w4.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         btn = QPushButton('S')
         btn.setFixedSize(20,20)
         btn.clicked.connect(lambda: self.on_click_data_update_stretch(self.w4))
@@ -559,7 +592,8 @@ class TestClientUI(QMainWindow):
 
         #w5-灵活分钟刷新，达到预设次数
         self.w5 = InitChildQwidGet()
-        self.main_window_layout.addWidget(self.w5.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self.main_window_layout.addWidget(self.w5.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.content_widget_layout.addWidget(self.w5.overall_widget, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         btn = QPushButton('S')
         btn.setFixedSize(20,20)
         btn.clicked.connect(lambda: self.on_click_data_update_stretch(self.w5))
@@ -570,7 +604,8 @@ class TestClientUI(QMainWindow):
         #当日成交额
         self.w6 = InitChildQwidGet()
         self.w6.overall_widget.setFixedWidth(self.MAX_H_SIZE * 2)
-        self.main_window_layout.addWidget(self.w6.overall_widget, 1, alignment=Qt.AlignmentFlag.AlignLeft)
+        # self.main_window_layout.addWidget(self.w6.overall_widget, 1, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.content_widget_layout.addWidget(self.w6.overall_widget, 1, alignment=Qt.AlignmentFlag.AlignLeft)
         content_label = QLabel(f'当日成交金额', self.w6.up_contnet_widget)
         self.w6.up_contnet_widget_layout.addWidget(content_label)
         
@@ -598,6 +633,38 @@ class TestClientUI(QMainWindow):
         self.w5.bottom_scroll_area.verticalScrollBar().valueChanged.connect(self.w6.bottom_scroll_area.verticalScrollBar().setValue)
         self.w6.bottom_scroll_area.verticalScrollBar().valueChanged.connect(self.w5.bottom_scroll_area.verticalScrollBar().setValue)
         
+    # 初始化翻页widget
+    def init_page_widget(self):
+        self.page_button_widget = QWidget()
+        self.page_button_widget_layout = QHBoxLayout(self.page_button_widget)
+        self.page_button_widget.setFixedHeight(45)
+        self.main_window_layout.addWidget(self.page_button_widget)
+        # spacer1 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)  
+        # spacer2 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        page_count = "00"
+
+        last_btn = QPushButton('Last')
+        next_btn = QPushButton('Next')
+        cur_page_edit = QLineEdit(self)
+        page_count_label = QLabel(f'/{page_count}')
+
+        last_btn.setFixedSize(40,35)
+        next_btn.setFixedSize(40,35)
+        cur_page_edit.setFixedSize(40, 35)
+        page_count_label.setFixedSize(25, 35)
+
+        self.page_button_widget_layout.addWidget(last_btn, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.page_button_widget_layout.addWidget(cur_page_edit, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.page_button_widget_layout.addWidget(page_count_label, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.page_button_widget_layout.addWidget(next_btn, 1, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        cur_page_edit.setText(f"1")
+
+        last_btn.clicked.connect(lambda: self.on_click_data_update_stretch(self.w5))
+        cur_page_edit.returnPressed.connect(lambda: self.on_click_data_update_stretch(self.w5))
+        next_btn.clicked.connect(lambda: self.on_click_data_update_stretch(self.w5))
+    
     #自动调整主窗口尺寸变化，恶心至极！！！！！！
     def adjust_window_size(self):
         #要先设置一下，才能重新调整主窗口尺寸，800参数随便多少都可以
@@ -841,6 +908,88 @@ class TestClientUI(QMainWindow):
         self.thread.finished.connect(self.update_label)#self.update_label
         self.thread.start()  
 
+    # 初始化中途开启或关盘后开启相关数据
+    def init_halfway_info_single(self):
+        print(f"begin init halfway data info")
+
+        temp_lastest_eob = ""
+
+        for key, value in self.wait_for_update_dic.items():
+            if key == "w2":
+                for item in value:
+                    self.update_w2_label(item["symbol"], item["percent"], item["eob_time"])
+                self.wait_for_update_dic["w2"].clear()
+                
+            elif key == "w4":
+                for item in value:
+                    # self.update_w4_label(item["symbol"], item["percent"], item["eob_time"])
+
+                    symbol = item["symbol"]
+                    percent = item["percent"]
+                    eob = item["eob_time"]
+
+                    if eob not in self.w5.stock_time_labelinfo_dic[symbol].keys():
+                        data_label = self.create_label_with_percent(eob, percent, self.w5.stock_widget_dic[symbol].widget)
+                        data_label.setStyleSheet('QLabel { color: red; }')  
+
+                        stock_info = StockTimeLbelInfo(data_label, percent, eob)
+                        self.w5.stock_time_labelinfo_dic[symbol][eob] = stock_info
+
+                        # 注释掉，分页中，中途开启，只初始化，但不添加进layout
+                        # 并且新建一个arr，存储已达标且创建好了的label
+                        self.w5.stock_widget_dic[symbol].layout.addWidget(data_label)
+
+                        self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
+                        self.all_stock_all_time_info[symbol].agility_percent_label_arr.append(data_label)
+
+                        print(f"{symbol}|{len(self.all_stock_all_time_info[symbol].agility_percent_label_arr)}|{eob}|{percent}")
+
+                    else:
+                        self.w5.stock_time_labelinfo_dic[symbol][eob].percent = percent
+                        self.w5.stock_time_labelinfo_dic[symbol][eob].label.setText(f'{eob}\n{percent}%')
+
+                    # 记录最晚一次时间，取出来，好在下方进行排序
+                    if temp_lastest_eob == "":
+                        temp_lastest_eob = eob
+                    else:
+                        # 判断哪一条数据，为最晚刷新且达标的数据
+                        t_l = datetime.strptime(temp_lastest_eob, "%H:%M:%S").time()
+                        t_c = datetime.strptime(eob, "%H:%M:%S").time()
+                        if t_c > t_l:
+                            temp_lastest_eob = eob
+
+                self.wait_for_update_dic["w4"].clear()
+
+        # temp_lastest_eob,还需要判断一下如果过早启动，或者没有一条达标数据时，时间的选择
+        print(f"============{temp_lastest_eob}")
+        if temp_lastest_eob == "":
+            temp_lastest_eob = "09:25:00"
+
+        # 进行重新排序，并且显示第一页所有标的数据
+        for temp_symbol in self.symbol_arr:
+            self.order_widget_dic[temp_symbol] = float(self.all_stock_all_time_info[temp_symbol].all_agility_percent[self.estimate_dic[temp_lastest_eob]])
+        # 根据选出的时间重新排次序
+        sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
+
+        for key, val in sorted_items_desc:
+            self.page_show_symbol_arr.append(key)
+            if len(self.page_show_symbol_arr) == self.page_show_count:
+                break
+
+        for page_symbol in self.page_show_symbol_arr:
+            for child_widget in self.child_widget_arr:
+                # # 找到该标的widget
+                # remove_widget = child_widget.stock_widget_dic[symbol].widget
+                # # 找到该标的所在的layout的下标
+                # remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+                # # 从此下标移除
+                # child_widget.bottom_update_widget_layout.takeAt(remove_index)
+                # # 插入到所在位置
+                # child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
+
+                #==================
+                child_widget.bottom_update_widget_layout.addWidget(child_widget.stock_widget_dic[page_symbol].widget)
+
 
     # 只初始化标的代码,名称,及相关w1-6中的各个容器
     def init_window_stork_name(self):
@@ -853,12 +1002,20 @@ class TestClientUI(QMainWindow):
             temp_qwidget.setFixedWidth(self.MAX_H_SIZE * 3)
             temp_qwidget.setFixedHeight(self.MAX_V_SIZE)
 
-            self.w1.bottom_update_widget_layout.addWidget(temp_qwidget)
+            # 分页功能中，初始化时，这里也不用添加到下方刷新容器中
+            # 下面的label应该可以添加进每个标的的对用的layout中，但是下方刷新layout就不要添加此标的qwidget，试试看
+            # self.w1.bottom_update_widget_layout.addWidget(temp_qwidget)
 
-            stock = QLabel(f'{item}', temp_qwidget)  
+            # 分页功能，这里就不能带parent了，-----, temp_qwidget
+            stock = QLabel(f'{item}')  
             stock.setMinimumWidth(self.MAX_H_SIZE)
             stock.setMinimumHeight(self.MAX_V_SIZE)  
-            temp_qwidget_layout.addWidget(stock)
+            # 初始化时，也不需要添加到layout中
+            # temp_qwidget_layout.addWidget(stock)
+
+            # 这里需要在w1里创建一个dic，来存储stock和name的label,--dic<stock_id,dic<stock_label:Label, name_label:Lbael>>
+            # 这个可能暂时用不上，也可以先保留
+            self.w1.stock_name_label_dic[item] = {"stock_label":stock, "name_label:":None}
 
             self.w1.stock_widget_dic[item] = LabelOrderInfo(item, temp_qwidget, temp_qwidget_layout)
             # self.w1.stock_widget_dic[item].widget.setObjectName(item)
@@ -886,7 +1043,8 @@ class TestClientUI(QMainWindow):
             # 单独为w4添加刷新label
             self.all_stock_all_time_info[item].refresh_agility_label = self.create_label_with_percent("0", "0", self.w4.stock_widget_dic[item].widget)
 
-            #添加进各自layout
+            # 添加进各自layout
+            # 由于分页原因，这里将暂时不添加进自己的layout中，后面将从重新排序中的当前页面哪些标的需要显示再添加进layout中
             self.w1.stock_widget_dic[item].layout.addWidget(stock)
             self.w4.stock_widget_dic[item].layout.addWidget(self.all_stock_all_time_info[item].refresh_agility_label)
             
@@ -908,11 +1066,16 @@ class TestClientUI(QMainWindow):
 
         #初始化名称
         for key, valume in self.w1.stock_widget_dic.items():
-                
-            name = QLabel(f'{self.name_dic[key]}', temp_qwidget)  
+            # 分页功能，这里就不能带parent了，-----, temp_qwidget
+            name = QLabel(f'{self.name_dic[key]}')  
             name.setMinimumWidth(self.MAX_H_SIZE)
             name.setMinimumHeight(self.MAX_V_SIZE)  
-            valume.layout.addWidget(name)
+            # valume.layout.addWidget(name)
+            self.w1.stock_name_label_dic[key]["name_label"] = name
+
+            # 测试用
+            valume.layout.addWidget(self.w1.stock_name_label_dic[key]["stock_label"])
+            valume.layout.addWidget(self.w1.stock_name_label_dic[key]["name_label"])
 
 
         #初始化完成后，向服务器发送已完成消息
@@ -1057,7 +1220,8 @@ class TestClientUI(QMainWindow):
         temp_qwidget_layout = QHBoxLayout(temp_qwidget)
         temp_qwidget.setFixedHeight(self.MAX_V_SIZE)
         qwidget.stock_widget_dic[item] = LabelOrderInfo(item, temp_qwidget, temp_qwidget_layout)
-        qwidget.bottom_update_widget_layout.addWidget(temp_qwidget)
+        # 由于分页功能，在初始化时，这里暂时不添加进layout
+        # qwidget.bottom_update_widget_layout.addWidget(temp_qwidget)
         qwidget.label_with_time_dic[item] = []
         qwidget.stock_time_labelinfo_dic[item] = {}
 
@@ -1251,7 +1415,8 @@ class TestClientUI(QMainWindow):
 
     # 创建label
     def create_label_with_percent(self, eob, percent, parent_widget):
-        data_label = QLabel(f'{eob}\n{percent}%', parent_widget)  
+        # 分页功能中，这里应该就不能带parent_widget了，带了话就会显示在UI上----, parent_widget
+        data_label = QLabel(f'{eob}\n{percent}%')  
         data_label.setMinimumHeight(self.MAX_V_SIZE)  
         data_label.setMinimumWidth(self.MAX_H_SIZE)
 
@@ -1711,7 +1876,7 @@ class TestClientUI(QMainWindow):
 
             # 重新排序
             # 需要先将当前灵活分钟的值赋予排序用的dic
-            # 现在客户端上的卡住，应该是由于重新排序引起的，这里需要重新，不能所有标的全部重新排序，需要用插入的方式来达到排序的方式
+            # 现在客户端上的卡住，应该是由于重新排序引起的，这里需要重新做，不能所有标的全部重新排序，需要用插入的方式来达到排序的方式
             for temp_symbol in self.symbol_arr:
                 self.order_widget_dic[temp_symbol] = float(self.all_stock_all_time_info[temp_symbol].all_agility_percent[self.estimate_dic[eob]])
 
@@ -1731,6 +1896,14 @@ class TestClientUI(QMainWindow):
                 else:
                     find_target_symbol_index += 1
 
+            # 将重新拍好序的标的，装入分页所需要显示的标的集合中
+            # 搬到下面那个for里面试试，可以减少一个for循环
+            # self.page_show_symbol_arr.clear()
+            # for key, val in sorted_items_desc:
+            #     self.page_show_symbol_arr.append(key)
+            #     if len(self.page_show_symbol_arr) == self.page_show_count:
+            #         break
+
             temp_for_select_stork_index = 0
             self.select_stork_list.clear()
 
@@ -1740,36 +1913,56 @@ class TestClientUI(QMainWindow):
             remove_widget = None
 
             for child_widget in self.child_widget_arr:
+                    # 找到该标的widget
+                    remove_widget = child_widget.stock_widget_dic[symbol].widget
+                    # 找到该标的所在的layout的下标
+                    remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+                    # 从此下标移除
+                    child_widget.bottom_update_widget_layout.takeAt(remove_index)
+                    # 插入到所在位置
+                    child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
 
-                # 找到该标的widget
-                remove_widget = child_widget.stock_widget_dic[symbol].widget
-                # 找到该标的所在的layout的下标
-                remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
-                # 从此下标移除
-                child_widget.bottom_update_widget_layout.takeAt(remove_index)
-                # 插入到所在位置
-                child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
+            # 添加判断，判断该标的是否在当前分页的集合中
+            # if symbol in self.page_show_symbol_arr:
+            #     for child_widget in self.child_widget_arr:
+            #         # 找到该标的widget
+            #         remove_widget = child_widget.stock_widget_dic[symbol].widget
+            #         # 找到该标的所在的layout的下标
+            #         remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+            #         # 从此下标移除
+            #         child_widget.bottom_update_widget_layout.takeAt(remove_index)
+            #         # 插入到所在位置
+            #         child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
+            # else:
+            #     for child_widget in self.child_widget_arr:
+            #         pass
 
-                #重新添加排序过后的widget
-                for key, val in sorted_items_desc:
+            # 重新添加排序过后的widget
+            # 这个for循环好像应该拿出外面那个for循环
+            # 暂时用不上，先注释掉
+            # for key, val in sorted_items_desc:
 
-                    # 添加进搜索功能队列
-                    # 暂时没用了!
-                    if temp_for_select_stork_index == 0:
-                        self.select_stork_list.append(key)
+                # # 分页显示所需集合
+                # if len(self.page_show_symbol_arr) < self.page_show_count:
+                #     self.page_show_symbol_arr.append(key)
 
-                    # 这里现在还需要优先将搜索的标的添加进允许刷新队列中
-                    # 暂时没用了!
-                    if len(self.refresh_in_select_arr) != 0:
-                        for select_symbol in self.refresh_in_select_arr:
-                            self.refresh_in_stock_arr.append(select_symbol)
+                # 添加进搜索功能队列
+                # 暂时没用了!
+                # if temp_for_select_stork_index == 0:
+                #     self.select_stork_list.append(key)
 
-                    # 刷新队列，处于前面固定数量的标的，才进行实时刷新
-                    if t_index <= self.refresh_stork_count:
-                        self.refresh_in_stock_arr.append(key)
-                    t_index += 1
+                # 这里现在还需要优先将搜索的标的添加进允许刷新队列中
+                # 暂时没用了!
+                # if len(self.refresh_in_select_arr) != 0:
+                #     for select_symbol in self.refresh_in_select_arr:
+                #         self.refresh_in_stock_arr.append(select_symbol)
 
-                temp_for_select_stork_index += 1
+                # 刷新队列，处于前面固定数量的标的，才进行实时刷新
+                # if t_index <= self.refresh_stork_count:
+                #     self.refresh_in_stock_arr.append(key)
+                # t_index += 1
+            # 这里之前是在上面那个for循环里面的，现在拿出来了，先观察有没有什么问题，如果没有就删掉
+            # temp_for_select_stork_index += 1
 
             # 由于按照每分钟刷新目前在w2里面被禁用了，暂时添加在这里试试
             self.stock_order_one_time[symbol].eob = eob
@@ -1796,6 +1989,13 @@ class TestClientUI(QMainWindow):
     # 更新w4-label
     def update_w4_label(self, symbol, percent, eob):
 
+        # 一定要有这句，这个dic是记录所有标的所有时间段的数据
+        # 这个可能需要拿到最前面
+        self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
+        # 将灵活时间段的值存进排序中,这里应该不需要了，因为在排序中重新赋了一次值！
+        # self.order_widget_dic[symbol] = percent
+        self.order_label(symbol, eob)
+
         # 判断是否进入下一个时间段，如果是需要在w5中添加label   last_agility_refresh_eob
         if self.all_stock_all_time_info[symbol].last_agility_refresh_eob != eob:
             # 先判断一下是否第一次进来
@@ -1810,15 +2010,9 @@ class TestClientUI(QMainWindow):
             self.all_stock_all_time_info[symbol].last_agility_refresh_eob = eob
 
         self.all_stock_all_time_info[symbol].refresh_agility_label.setText(f'{eob}\n{percent}%')
-        # 一定要有这句，这个dic是记录所有标的所有时间段的数据
-        self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
-
-        # 将灵活时间段的值存进排序中,这里应该不需要了，因为在排序中重新赋了一次值！
-        # self.order_widget_dic[symbol] = percent
-        self.order_label(symbol, eob)
 
         # label上色，虽然暂时没有必要，孙哥喜欢就添加吧！
-        if float(percent) > 800:
+        if float(percent) >= 800:
             self.all_stock_all_time_info[symbol].refresh_agility_label.setStyleSheet('QLabel { color: red; }')  
         else:
             self.all_stock_all_time_info[symbol].refresh_agility_label.setStyleSheet('QLabel { color: green; }') 
@@ -2211,7 +2405,7 @@ class ReciveQThread(QThread):
                 elif operation_id == OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND:
                     self.refresh_data_106()
 
-                #中途或者关盘后开启，接收初始化数据
+                #中途或者关盘后开启，接收初始化数据 107
                 elif operation_id == OP_ID_S2C_PERCENT_TODAY_DATA_SEND:
                     self.init_receive_halfway_agility_data_107()
 
@@ -2271,22 +2465,40 @@ class ReciveQThread(QThread):
                 break
 
 
-        #当数据来时，UI还在更新，则添加先添加到等待集合里
-        if main_window.is_in_updating == False:
+        # 由于添加分页功能，这里可能需要新添加一个单独的中途开启UI刷新功能
+        # 尝试只创建label，但不添加到layout中，试试看
+        # 需要重新添加一个信号，专门用来记录中途开启的数据以及创建label但不添加进layout
+        # 现在目前中途开启只支持w4灵活数据，如果需要支持w2每分钟数据，需要在服务器新添加S2C命令，当w2和w4数据都过来后，
+        # 再向客户端发送中途数据发送完成指令，让客户端统一更新w2和w4数据，这个暂时用不上，后续根据需求添加
 
-            #将临时存放等待刷新的数据集合给准备刷新的集合
-            for item in main_window.temp_wait_for_update_dic["w4"]:
-                temp_item = item
-                main_window.wait_for_update_dic["w4"].append(temp_item)    
+        # 将临时存放等待刷新的数据集合给准备刷新的集合
+        for item in main_window.temp_wait_for_update_dic["w4"]:
+            temp_item = item
+            main_window.wait_for_update_dic["w4"].append(temp_item)
+        # 清空临时list,准备接新的数据
+        main_window.temp_wait_for_update_dic["w4"].clear()
+        # 这里还是需要将正在更新设为True
+        main_window.is_in_updating = True
+        main_window.is_init_halfway_info_single = True
+        main_window.has_init_halfway_info_single.emit(main_window.is_init_halfway_info_single)
 
-            #清空临时list,准备接新的数据
-            main_window.temp_wait_for_update_dic["w4"].clear()
+        # 当数据来时，UI还在更新，则添加先添加到等待集合里
+        # 由于分页功能，这里暂时注释掉
+        # if main_window.is_in_updating == False:
 
-            main_window.is_in_updating = True
+        #     #将临时存放等待刷新的数据集合给准备刷新的集合
+        #     for item in main_window.temp_wait_for_update_dic["w4"]:
+        #         temp_item = item
+        #         main_window.wait_for_update_dic["w4"].append(temp_item)    
 
-            main_window.is_refresh_new_data = True
-            main_window.has_refresh_data_single.emit(main_window.is_refresh_new_data)
-            main_window.is_refresh_new_data = False
+        #     #清空临时list,准备接新的数据
+        #     main_window.temp_wait_for_update_dic["w4"].clear()
+
+        #     main_window.is_in_updating = True
+
+        #     main_window.is_refresh_new_data = True
+        #     main_window.has_refresh_data_single.emit(main_window.is_refresh_new_data)
+        #     main_window.is_refresh_new_data = False
     
 
     # 封装 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND--106，当前分钟达标数据刷新
