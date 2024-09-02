@@ -15,6 +15,13 @@ import pickle
 import subprocess
 import math
 import sys 
+# import time
+# import datetime
+
+from openpyxl import Workbook
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
+from openpyxl.styles import Font
 
 global_i = 0
 str_strategy = 'VDebug' # V--VDebug
@@ -68,7 +75,9 @@ class StorkInfo:
         self.history_amount = 0
         self.current_amount = 0
         self.pre_close = 0.0 # 昨日关盘价
+        self.current_price = 0.0 # 实时价格
         self.sec_name = "" # 标的中文名称
+        self.record_agility_data = [] # 记录灵活时间达标的数据, []{agility_time, percent}
 
 class AgilityDataInfo:
     def __init__(self):
@@ -154,6 +163,8 @@ def init(context):
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
     context.datetime_morning_time_s = datetime.strptime('09:30:00', "%H:%M:%S").time()
+    context.datetime_output_excel_time = datetime.strptime('10:30:00', "%H:%M:%S").time()
+    context.datetime_current_price_time = datetime.strptime('14:15:00', "%H:%M:%S").time()
 
     context.subscription_stock_arr = []
     context.mac_address_arr = []
@@ -208,6 +219,7 @@ def init(context):
     
     context.is_subscribe = False
     context.is_can_show_print = False
+    context.is_output_excel = False
     context.iniclient_socket_lock = threading.Lock()
 
     context.temp_clear_curdata_index = 0
@@ -240,13 +252,14 @@ def init(context):
     # init_client_one_time(context)
 
     # 测试新版-服务器运算
-    init_client_stork(context)
+    # init_client_stork(context)
     
     # 测试获得当日历史数据
     # load_ids(context)
     # test_get_data(context)
     # get_history_data_in_today(context)
     # load_history_from_file(context)
+    # record_data_in_excel(context)
 
 
 #模拟线程，关盘后调试用
@@ -254,7 +267,7 @@ def simulation_on_bar(context):
 
     test_count_index = 0
 
-    test_time_d = '2024-07-05 '
+    test_time_d = '2024-08-30 '
     test_time_h = '10'
     test_time_m = '00'
     test_time_s = '00.00013+08:00'
@@ -268,6 +281,8 @@ def simulation_on_bar(context):
             context.cur_data_dic.clear()
             context.cur_data_dic[sy] = PackSecondDataFrame(sy, '10000', test_time_time).to_dict()
 
+            tick = {"symbol":sy, "last_amount":5000000.0, "created_at":test_time_time, "price":50.0}
+
             #if context.socket_dic:
             #    for k,v in context.socket_dic.items():
          
@@ -278,24 +293,30 @@ def simulation_on_bar(context):
             if context.socket_dic:
                 for k,v in context.socket_dic.items():
          
-                    if context.client_init_complete_dic[v] == True:
+                    # 新版本用
+                    context.cur_data_dic.clear() 
+                    context.cur_data_dic[tick['symbol']] = PackSecondDataFrame(tick['symbol'], tick['last_amount'], str(tick['created_at'])).to_dict()
+                    save_cur_data_to_dic(context, tick, v)
 
-                        send_message_second_method(v, context)
+                    # 老版本用
+                    # if context.client_init_complete_dic[v] == True:
 
-                        if len(context.ready_for_send) > 0:
-                            for ready_data in context.ready_for_send:
-                                context.cur_data_dic.clear()
-                                context.cur_data_dic[ready_data['symbol']] = ready_data
-                                send_message_second_method(v, context)
+                    #     send_message_second_method(v, context)
 
-                            context.ready_for_send.clear()
+                    #     if len(context.ready_for_send) > 0:
+                    #         for ready_data in context.ready_for_send:
+                    #             context.cur_data_dic.clear()
+                    #             context.cur_data_dic[ready_data['symbol']] = ready_data
+                    #             send_message_second_method(v, context)
 
-                    else:
-                        for data_key, data_value in context.cur_data_dic.items():
-                            temp_ready_for_send_data = data_value
-                            context.ready_for_send.append(temp_ready_for_send_data)
+                    #         context.ready_for_send.clear()
 
-                        print(f"ready_for_send length:{len(context.ready_for_send)}")
+                    # else:
+                    #     for data_key, data_value in context.cur_data_dic.items():
+                    #         temp_ready_for_send_data = data_value
+                    #         context.ready_for_send.append(temp_ready_for_send_data)
+
+                    #     print(f"ready_for_send length:{len(context.ready_for_send)}")
         
         test_count_index += 1
         if test_count_index >= 5:#5
@@ -351,9 +372,17 @@ def subscribe_method(context):
 
     #这里需要加一个过滤停牌的功能
     # print(f"{info}")
+    
+    temp_current_price_dic = {}
+    # 中途开启或者关盘后使用的获取最近更新的一次标的价格
+    if reach_time(context, context.datetime_current_price_time) == True:
+        current_data = current(symbols = context.symbol_str, fields='symbol, price')
+        for i in range(len(current_data)):
+            # print(f"{current_data[i]["symbol"]}|{current_data[i]["price"]}")
+            temp_current_price_dic[current_data[i]["symbol"]] = current_data[i]["price"]
 
     for i in range(len(info)):
-        print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}|{info.pre_close[i]}")
+        # print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}|{info.pre_close[i]}")
         context.temp_matching_dic[info.symbol[i]] = info.sec_name[i]
         # 初始化所有标的，相关信息，部分数据在其他地方初始化
         context.all_stock_info_dic[info.symbol[i]] = StorkInfo()
@@ -361,8 +390,98 @@ def subscribe_method(context):
         context.all_stock_info_dic[info.symbol[i]].sec_name = info.sec_name[i]
         context.all_stock_info_dic[info.symbol[i]].pre_close = info.pre_close[i]
 
+        if reach_time(context, context.datetime_current_price_time) == True:
+            context.all_stock_info_dic[info.symbol[i]].current_price = temp_current_price_dic[info.symbol[i]]
+            print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}|{info.pre_close[i]}|{temp_current_price_dic[info.symbol[i]]}")
+
     print(f"ids count:{len(info)}")
     
+
+def get_todat_date():
+        # 获取当前日期
+        today = datetime.now().date()
+
+        # 获取前一天的日期  - timedelta(days=1)
+        previous_day = today
+
+        # 获取前一天的星期几（0是星期一，6是星期天）
+        weekday = previous_day.weekday()
+
+        # 如果前一天是星期六（weekday == 5）或星期天（weekday == 6）
+        if weekday >= 5:
+            # 获取星期五的日期（如果是星期天，需要减去2天；如果是星期六，需要减去1天）
+            friday_date = previous_day - timedelta(days=weekday - 4)
+            return friday_date
+        else:
+            # 前一天不是星期六或星期天，直接返回前一天的日期
+            return previous_day
+
+def reach_time(context, target_time):
+    now = datetime.strptime(str(context.now.hour) + ":" + str(context.now.minute) + ":" + str(context.now.second), "%H:%M:%S").time()
+
+    return (now >= target_time)
+
+def record_data_in_excel(context):
+    wb = Workbook()  
+    ws = wb.active  
+    ws.title = "S1" 
+
+    data = []
+    first_row = []
+    data.append(first_row)
+    data[0].append("代码")
+    data[0].append("名称")
+    data[0].append("涨幅")
+    last_record_count = 0
+    
+    for symbol_val in context.all_stock_info_dic.values():
+    
+        if len(symbol_val.record_agility_data) != 0:
+
+            temp_data_frist_row = []
+            temp_data_second_row = []
+
+            # print(f"{symbol_val.symbol}|{symbol_val.sec_name}|{len(symbol_val.record_agility_data)}")
+
+            symbol_id = symbol_val.symbol.split(".")[1]
+
+            temp_data_frist_row.append(symbol_id)
+            temp_data_frist_row.append(symbol_val.sec_name)
+
+            yesterday_price = context.all_stock_info_dic[symbol_val.symbol].pre_close
+            today_price = context.all_stock_info_dic[symbol_val.symbol].current_price
+            increase_price = round((float(today_price) - float(yesterday_price)) / float(yesterday_price), 2)
+            increase_price = str(increase_price) + "%"
+
+            temp_data_frist_row.append(increase_price)
+                
+            for recor_data_info in symbol_val.record_agility_data:
+                temp_data_frist_row.append(recor_data_info["percent"])
+
+            data.append(temp_data_frist_row)
+
+            if last_record_count == 0:
+                last_record_count = len(symbol_val.record_agility_data)
+                for i in range(last_record_count):
+                    data[0].append(i + 1)
+            else:
+                if len(symbol_val.record_agility_data) > last_record_count:
+                    temp_count = len(symbol_val.record_agility_data) - last_record_count
+                    for i in range(temp_count):
+                        data[0].append(last_record_count + i + 1)
+                    last_record_count = len(symbol_val.record_agility_data)
+
+    print(f"begin output excel, data length:{len(data)}")
+
+    # 遍历数据，并将每行添加到工作表中  
+    for row in data:  
+        ws.append(row)
+
+    file_path = 'E:\\DataForExcel\\RecordStockCount' + str(get_todat_date()) + '.xlsx'
+    wb.save(file_path)
+
+    context.is_output_excel = True
+
 
 #初始化客户端，一次性传输数据
 def init_client_one_time(context):
@@ -718,10 +837,14 @@ def init_client_stork(context):
                                 if int(temp_agility_percent) >= context.data_limit_to_send.agility_limit:
                                     # 将中途开启并且达标的数据存入准备发送的arr中
                                     context.halfway_agility_data_for_send_arr.append({"symbol":s_v.symbol, "percent":temp_agility_percent, "eob":s_v.agility_time})
+                                    # 将达标的数据添加进本标的信息中
+                                    context.all_stock_info_dic[s_v.symbol].record_agility_data.append({"agility_time":s_v.agility_time, "percent":temp_agility_percent})
 
                         # 发送中途开启后的灵活时间数据
                         init_send_halfway_agility_data(context, client_socket)
 
+                        # 测试EXCEL用
+                        # record_data_in_excel(context)
 
                         val.is_init = True
                         val.is_initing = False
@@ -745,9 +868,7 @@ def init_client_stork(context):
 
             # 关盘后，模拟on_bar用,用这个
             # simulation_on_bar(context)
-
-
-
+            
 
 #由于tick中内容代码过多，尝试将各部分代码进行封装!!!
 
@@ -1052,6 +1173,15 @@ def calculate_percent_agility(context, symbol_id, symbol_time):
     return agility_percent
 
 
+#__tick__当前价格相关判断
+def estimate_about_price(context, symbol, current_price):
+    context.all_stock_info_dic[symbol].current_price = current_price
+    is_increase = False
+    if current_price >= context.all_stock_info_dic[symbol].pre_close:
+        is_increase = True
+
+    return is_increase
+
 #__tick__存储今日标的实时数据, key--symbol，value--dic(dic=key--min, value--min_data)
 # 数据对比和发送都在这里
 def save_cur_data_to_dic(context, tick, clinet_socket):
@@ -1060,6 +1190,7 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
 
     cur_tick_symbol = tick['symbol']
     cur_tick_amount = tick['last_amount']
+    cur_tick_price = tick['price']
 
     temp_tick_time = resolve_time_minute(tick['created_at']) 
     cur_tick_time = temp_tick_time[0] + ":" + temp_tick_time[1] + ":" + "00"
@@ -1107,7 +1238,9 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
 
     # 数据对比
     min_percent = calculate_percent_min(context, cur_tick_symbol, cur_tick_time)
-    agility_percent = calculate_percent_agility(context, cur_tick_symbol, cur_tick_time)
+    agility_percent = calculate_percent_agility(context, cur_tick_symbol, cur_tick_time) 
+
+    # print(f"{agility_percent}")
 
     # 满足条件向客户端发送
     # 当前分钟
@@ -1116,15 +1249,37 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
         send_message_min(context, clinet_socket, cur_tick_symbol, min_percent, cur_tick_time)
     # 当前灵活分钟或当前标的是处于搜索中的标的
     if int(agility_percent) >= context.data_limit_to_send.agility_limit or cur_tick_symbol in context.refresh_select_stock_arr or cur_tick_symbol in context.top_stock_arr:
-        print(f"{cur_tick_symbol}::agility:{context.estimate_dic[cur_tick_time]}|{agility_percent}")
+        # 这里添加一个实时涨幅的判断，水上/水下(昨日收盘价与当前的实时价格对比)
+        temp_is_increase = estimate_about_price(context, cur_tick_symbol, cur_tick_price)
+        print(f"{cur_tick_symbol}::agility:{context.estimate_dic[cur_tick_time]}|{agility_percent}|{temp_is_increase}")
 
         # 当此标的为搜索中的标的时候，且当前percent为0或者小于0，则直接发送0.0数据，暂时！
         temp_agility_percent = 0.0
         if agility_percent > 0.0:
             temp_agility_percent = agility_percent
 
-        send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
+        # 当此标的在水上(当前价格高于昨日关盘价)的时候，才发送消息
+        if temp_is_increase == True:
+            send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
 
+        # 将达标的数据添加进本标的信息中
+        if len(context.all_stock_info_dic[cur_tick_symbol].record_agility_data) == 0:
+            context.all_stock_info_dic[cur_tick_symbol].record_agility_data.append({"agility_time":context.estimate_dic[cur_tick_time], "percent":temp_agility_percent})
+        else:
+            # 取得本标的最后一条存储的达标数据
+            temp_last_index = len(context.all_stock_info_dic[cur_tick_symbol].record_agility_data) - 1
+            # 判断是否还处于最后一条数据的灵活时间段
+            if context.all_stock_info_dic[cur_tick_symbol].record_agility_data[temp_last_index]["agility_time"] == context.estimate_dic[cur_tick_time]:
+                context.all_stock_info_dic[cur_tick_symbol].record_agility_data[temp_last_index]["percent"] = temp_agility_percent
+            else:
+                context.all_stock_info_dic[cur_tick_symbol].record_agility_data.append({"agility_time":context.estimate_dic[cur_tick_time], "percent":temp_agility_percent})
+
+    # print(f"{cur_tick_symbol}|{cur_tick_price}")
+
+# __tick__定时将数据输出到excel
+def output_excel_method(context):
+    if reach_time(context, context.datetime_output_excel_time) and context.is_output_excel == False:
+        record_data_in_excel(context)
 
 def on_tick(context, tick):
 
@@ -1141,6 +1296,9 @@ def on_tick(context, tick):
 
     # 初始化连入的客户端--------------------------------------------------------
     init_client_method(context)
+
+    # 定时任务，达到时间点后，向EXCEL输出数据------------------------------------
+    output_excel_method(context)
 
     # 实时数据刷新刷新部分------------------------------------------------------
     if context.is_subscribe == True:
@@ -1592,7 +1750,7 @@ def get_history_data_in_today(context):
     # print(f"{context.symbol_str}")
 
     # -----测试用
-    # now_data = "2024-08-16 " + "09:15:01.001+08:00"
+    # now_data = "2024-08-30 " + "10:00:01.001+08:00"
     # -----测试用
     
     get_now_time_arr = str(now_data).split("+")
@@ -1630,11 +1788,12 @@ def get_history_data_in_today(context):
     s_time= str(get_now_time_arr_1[0]) + ' 09:15:00'
     e_time = str(get_now_time_arr_1[0]) + ' ' + str(get_now_hour) + ':' + str(get_now_min) + ':' + '00'
     #test为测试时用的时间
-    test_s_time = '2024-07-05' + ' ' + '09:15:00'
-    test_e_time = '2024-07-05' + ' ' + '15:00:00'
-    #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉
+    test_s_time = '2024-08-30' + ' ' + '09:15:00'
+    test_e_time = '2024-08-30' + ' ' + '10:00:00'
+    #测试的时候用，重新赋值，不用后面老是替换了,不用的时候注释掉 -----测试用
     # s_time = test_s_time
     # e_time = test_e_time
+    # -----测试用
 
     #这里为获取当日9:25的集合进价时间   2
     s_25_today_time = str(get_now_time_arr_1[0]) + ' 09:24:57'
@@ -2610,7 +2769,8 @@ class ReciveClientThreadC(threading.Thread):
                     else:
                         print(f"{self.client_socket}:this is no recognition MAC, close socket!!!")
                         # 非注册客户端，连接上来后引发报错问题，从这里直接删除，未验证是否还会引发报错
-                        self.context.delete_client_socket_arr.append(self.client_address)
+                        # self.context.delete_client_socket_arr.append(self.client_address)
+                        del self.context.init_client_socket_dic[self.client_address]
                         del self.context.client_init_complete_dic[self.client_socket]
                         self.client_socket.close()
                         self.stop()
