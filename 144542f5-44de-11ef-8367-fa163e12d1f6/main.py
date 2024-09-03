@@ -65,6 +65,7 @@ class DataLimitToSend:
     def __init__(self):
         self.min_limit = 20000 # 1分钟实时数据超过这个界限,就send
         self.agility_limit = 800 # 灵活实时数据超过这个界限，就sned
+        self.record_agility_limit = 1000 # 记录数据界限，输出到excel
 
 class StorkInfo:
     def __init__(self):
@@ -154,6 +155,7 @@ def init(context):
     context.LENGTH_FORMAT = 'I'
     context.chunk_size = 1024
     context.set_agility_time = 5 # 设置灵活分钟数，例如为5时，5分钟内的历史数据与实时5分钟内的数据
+    context.record_data_count_of_row = 7 # excel中，每行记录多少个数据
     context.operation_id_send = 0
     context.operation_id_recive = 0
     context.estimate_index = 0 # 灵活时间段下标，用于判断当前时间属于哪一段灵活时间，可用于estimate_dic中的key值
@@ -163,7 +165,7 @@ def init(context):
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
     context.datetime_morning_time_s = datetime.strptime('09:30:00', "%H:%M:%S").time()
-    context.datetime_output_excel_time = datetime.strptime('10:30:00', "%H:%M:%S").time()
+    context.datetime_output_excel_time = datetime.strptime('11:15:00', "%H:%M:%S").time()
     context.datetime_current_price_time = datetime.strptime('14:15:00', "%H:%M:%S").time()
 
     context.subscription_stock_arr = []
@@ -392,10 +394,19 @@ def subscribe_method(context):
 
         if reach_time(context, context.datetime_current_price_time) == True:
             context.all_stock_info_dic[info.symbol[i]].current_price = temp_current_price_dic[info.symbol[i]]
-            print(f"{info.symbol[i]}|{info.sec_name[i]}|{info.is_suspended[i]}|{info.pre_close[i]}|{temp_current_price_dic[info.symbol[i]]}")
 
     print(f"ids count:{len(info)}")
     
+# 获取所有标的最新价格
+def get_stock_newest_price(context):
+    temp_current_price_dic = {}
+    # 中途开启或者关盘后使用的获取最近更新的一次标的价格
+    # if reach_time(context, context.datetime_current_price_time) == True:
+    current_data = current(symbols = context.symbol_str, fields='symbol, price')
+    for i in range(len(current_data)):
+        # print(f"{current_data[i]["symbol"]}|{current_data[i]["price"]}")
+        temp_current_price_dic[current_data[i]["symbol"]] = current_data[i]["price"]
+        context.all_stock_info_dic[current_data[i]["symbol"]].current_price = current_data[i]["price"]
 
 def get_todat_date():
         # 获取当前日期
@@ -443,23 +454,67 @@ def record_data_in_excel(context):
 
             # print(f"{symbol_val.symbol}|{symbol_val.sec_name}|{len(symbol_val.record_agility_data)}")
 
-            symbol_id = symbol_val.symbol.split(".")[1]
+            symbol_id = symbol_val.symbol.split(".")[1] 
+            symbol_name = symbol_val.sec_name + "(" + str(len(symbol_val.record_agility_data)) + ")"
 
             temp_data_frist_row.append(symbol_id)
-            temp_data_frist_row.append(symbol_val.sec_name)
+            temp_data_frist_row.append(symbol_name)
 
             yesterday_price = context.all_stock_info_dic[symbol_val.symbol].pre_close
             today_price = context.all_stock_info_dic[symbol_val.symbol].current_price
-            increase_price = round((float(today_price) - float(yesterday_price)) / float(yesterday_price), 2)
+            temp_increase_price = (float(today_price) - float(yesterday_price)) / float(yesterday_price)
+            # print(f"{symbol_id}|{temp_increase_price}")
+            increase_price = round(temp_increase_price * 100, 2)
             increase_price = str(increase_price) + "%"
 
             temp_data_frist_row.append(increase_price)
-                
-            for recor_data_info in symbol_val.record_agility_data:
-                temp_data_frist_row.append(recor_data_info["percent"])
+            
+            # 添加换行，如果该只标的数量大于7，就需要换行，每行数据最多7个
+            # row_count直接+1，方便下面for循环使用
+            row_count = len(symbol_val.record_agility_data) // context.record_data_count_of_row + 1
+            # 刚好该标的达标数为7时，需要-1
+            if len(symbol_val.record_agility_data) == context.record_data_count_of_row:
+                row_count -= 1
+            # 这个集合用来装行数
+            temp_row_arr = []
+            temp_row_arr.append(temp_data_frist_row)
+            # 创建行数集合
+            for i in range(row_count - 1):
+                # 0行就不需要添加了，上面就添加好了
+                t_r_arr = []
+                # 添加前面的3个空格
+                for n in range(3):
+                    t_r_arr.append(" ")
+                temp_row_arr.append(t_r_arr)
+            # 先判断数据行数是否为0
+            for i in range(row_count):
+                run_range = 0
+                residue_run_range = len(symbol_val.record_agility_data) - i * context.record_data_count_of_row
+                # 判断是否小于7，不然会超出record_agility_data下标
+                if len(symbol_val.record_agility_data) <= context.record_data_count_of_row:
+                    run_range = len(symbol_val.record_agility_data)
+                else:
+                    run_range = context.record_data_count_of_row
+                    if residue_run_range <= context.record_data_count_of_row:
+                        run_range = residue_run_range
 
-            data.append(temp_data_frist_row)
+                for n in range(run_range):
+                    temp_index = i * context.record_data_count_of_row + n
 
+                    if temp_index + 1 > len(symbol_val.record_agility_data):
+                        temp_index = len(symbol_val.record_agility_data) - 1
+
+                    temp_row_arr[i].append(symbol_val.record_agility_data[temp_index]["percent"])
+
+            for t_arr in temp_row_arr:
+                data.append(t_arr)
+
+            # for recor_data_info in symbol_val.record_agility_data:
+            #     temp_data_frist_row.append(recor_data_info["percent"])
+            # data.append(temp_data_frist_row)
+
+
+            # 对excel第一行添加数量，根据标的中，数量最多的为准
             if last_record_count == 0:
                 last_record_count = len(symbol_val.record_agility_data)
                 for i in range(last_record_count):
@@ -837,13 +892,17 @@ def init_client_stork(context):
                                 if int(temp_agility_percent) >= context.data_limit_to_send.agility_limit:
                                     # 将中途开启并且达标的数据存入准备发送的arr中
                                     context.halfway_agility_data_for_send_arr.append({"symbol":s_v.symbol, "percent":temp_agility_percent, "eob":s_v.agility_time})
+
+                                if int(temp_agility_percent) >= context.data_limit_to_send.record_agility_limit:
                                     # 将达标的数据添加进本标的信息中
                                     context.all_stock_info_dic[s_v.symbol].record_agility_data.append({"agility_time":s_v.agility_time, "percent":temp_agility_percent})
+
 
                         # 发送中途开启后的灵活时间数据
                         init_send_halfway_agility_data(context, client_socket)
 
                         # 测试EXCEL用
+                        # get_stock_newest_price(context)
                         # record_data_in_excel(context)
 
                         val.is_init = True
@@ -1175,7 +1234,7 @@ def calculate_percent_agility(context, symbol_id, symbol_time):
 
 #__tick__当前价格相关判断
 def estimate_about_price(context, symbol, current_price):
-    context.all_stock_info_dic[symbol].current_price = current_price
+    # context.all_stock_info_dic[symbol].current_price = current_price
     is_increase = False
     if current_price >= context.all_stock_info_dic[symbol].pre_close:
         is_increase = True
@@ -1191,6 +1250,8 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
     cur_tick_symbol = tick['symbol']
     cur_tick_amount = tick['last_amount']
     cur_tick_price = tick['price']
+
+    context.all_stock_info_dic[cur_tick_symbol].current_price = cur_tick_price
 
     temp_tick_time = resolve_time_minute(tick['created_at']) 
     cur_tick_time = temp_tick_time[0] + ":" + temp_tick_time[1] + ":" + "00"
@@ -1262,28 +1323,31 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
         if temp_is_increase == True:
             send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
 
-        # 将达标的数据添加进本标的信息中
-        if len(context.all_stock_info_dic[cur_tick_symbol].record_agility_data) == 0:
-            context.all_stock_info_dic[cur_tick_symbol].record_agility_data.append({"agility_time":context.estimate_dic[cur_tick_time], "percent":temp_agility_percent})
-        else:
-            # 取得本标的最后一条存储的达标数据
-            temp_last_index = len(context.all_stock_info_dic[cur_tick_symbol].record_agility_data) - 1
-            # 判断是否还处于最后一条数据的灵活时间段
-            if context.all_stock_info_dic[cur_tick_symbol].record_agility_data[temp_last_index]["agility_time"] == context.estimate_dic[cur_tick_time]:
-                context.all_stock_info_dic[cur_tick_symbol].record_agility_data[temp_last_index]["percent"] = temp_agility_percent
-            else:
+        # 新增条件，上了1000才添加进集合中
+        if int(agility_percent) >= context.data_limit_to_send.record_agility_limit:
+            # 将达标的数据添加进本标的信息中
+            if len(context.all_stock_info_dic[cur_tick_symbol].record_agility_data) == 0:
                 context.all_stock_info_dic[cur_tick_symbol].record_agility_data.append({"agility_time":context.estimate_dic[cur_tick_time], "percent":temp_agility_percent})
+            else:
+                # 取得本标的最后一条存储的达标数据
+                temp_last_index = len(context.all_stock_info_dic[cur_tick_symbol].record_agility_data) - 1
+                # 判断是否还处于最后一条数据的灵活时间段
+                if context.all_stock_info_dic[cur_tick_symbol].record_agility_data[temp_last_index]["agility_time"] == context.estimate_dic[cur_tick_time]:
+                    context.all_stock_info_dic[cur_tick_symbol].record_agility_data[temp_last_index]["percent"] = temp_agility_percent
+                else:
+                    context.all_stock_info_dic[cur_tick_symbol].record_agility_data.append({"agility_time":context.estimate_dic[cur_tick_time], "percent":temp_agility_percent})
 
     # print(f"{cur_tick_symbol}|{cur_tick_price}")
 
 # __tick__定时将数据输出到excel
 def output_excel_method(context):
     if reach_time(context, context.datetime_output_excel_time) and context.is_output_excel == False:
+        get_stock_newest_price(context)
         record_data_in_excel(context)
 
 def on_tick(context, tick):
 
-    # return
+    return
 
     # 更新对应标的的一些保存信息------------------------------------------------
     update_ids_info_method(context, tick)
