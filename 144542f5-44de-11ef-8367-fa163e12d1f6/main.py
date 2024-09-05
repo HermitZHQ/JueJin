@@ -165,7 +165,7 @@ def init(context):
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
     context.datetime_morning_time_s = datetime.strptime('09:30:00', "%H:%M:%S").time()
-    context.datetime_output_excel_time = datetime.strptime('11:15:00', "%H:%M:%S").time()
+    context.datetime_output_excel_time = datetime.strptime('10:30:00', "%H:%M:%S").time()
     context.datetime_current_price_time = datetime.strptime('14:15:00', "%H:%M:%S").time()
 
     context.subscription_stock_arr = []
@@ -445,8 +445,26 @@ def record_data_in_excel(context):
     data[0].append("涨幅")
     last_record_count = 0
     
+    # 添加临时排序dic，根据涨幅来排序
+    temp_order_dic = {}
     for symbol_val in context.all_stock_info_dic.values():
-    
+        yesterday_price = context.all_stock_info_dic[symbol_val.symbol].pre_close
+        today_price = context.all_stock_info_dic[symbol_val.symbol].current_price
+
+        temp_increase_price = (float(today_price) - float(yesterday_price)) / float(yesterday_price)
+        increase_price = round(temp_increase_price * 100, 2)
+
+        temp_order_dic[symbol_val.symbol] = increase_price
+
+    sorted_dic = sorted(temp_order_dic.items(), key=lambda item: item[1], reverse=True)
+
+    # for symbol_k, symbol_v in sorted_dic:
+    #     print(f"{symbol_k}|{symbol_v}")
+
+    for symbol_k, symbol_v in sorted_dic:
+    # for symbol_val in context.all_stock_info_dic.values():
+        symbol_val = context.all_stock_info_dic[symbol_k]
+
         if len(symbol_val.record_agility_data) != 0:
 
             temp_data_frist_row = []
@@ -463,7 +481,6 @@ def record_data_in_excel(context):
             yesterday_price = context.all_stock_info_dic[symbol_val.symbol].pre_close
             today_price = context.all_stock_info_dic[symbol_val.symbol].current_price
             temp_increase_price = (float(today_price) - float(yesterday_price)) / float(yesterday_price)
-            # print(f"{symbol_id}|{temp_increase_price}")
             increase_price = round(temp_increase_price * 100, 2)
             increase_price = str(increase_price) + "%"
 
@@ -473,7 +490,7 @@ def record_data_in_excel(context):
             # row_count直接+1，方便下面for循环使用
             row_count = len(symbol_val.record_agility_data) // context.record_data_count_of_row + 1
             # 刚好该标的达标数为7时，需要-1
-            if len(symbol_val.record_agility_data) == context.record_data_count_of_row:
+            if len(symbol_val.record_agility_data) % context.record_data_count_of_row == 0: # = | %
                 row_count -= 1
             # 这个集合用来装行数
             temp_row_arr = []
@@ -512,7 +529,6 @@ def record_data_in_excel(context):
             # for recor_data_info in symbol_val.record_agility_data:
             #     temp_data_frist_row.append(recor_data_info["percent"])
             # data.append(temp_data_frist_row)
-
 
             # 对excel第一行添加数量，根据标的中，数量最多的为准
             if last_record_count == 0:
@@ -1347,7 +1363,7 @@ def output_excel_method(context):
 
 def on_tick(context, tick):
 
-    return
+    # return
 
     # 更新对应标的的一些保存信息------------------------------------------------
     update_ids_info_method(context, tick)
