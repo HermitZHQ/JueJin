@@ -1,5 +1,5 @@
 # coding=utf-8
-# ------------------测试策略BA
+# ------------------测试策略AA
 # 相关指标：solo up 7% loss limit -3.5% total up 2% total sell time 13:35
 from __future__ import print_function, absolute_import
 from gm.api import *
@@ -14,11 +14,11 @@ import re
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
-def StrategyBA():
+def StrategyAA():
     pass
 
 # 全局需要修改的变量，如果策略变化（比如买卖变化，策略本身变化）都应该调整下面的值
-str_strategy = 'BA'
+str_strategy = 'AA'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path = 'c:\\TradeLogs\\IDs-' + str_strategy + '.txt'
 pos_info_path = 'c:\\TradeLogs\\Pos-' + str_strategy + '.npy'
@@ -26,15 +26,15 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
-sell_all_time = "13:35"
+order_overtime = 15 # 设置的委托超时时间，超时后撤单，单位秒
+sell_all_time = "15:35"
 
 class BuyMode:
     def __init__(self):
         # 注意每个策略下面只能设定一种对应的买入模式（也就是只有一种可以激活到1）！！
-        self.buy_all = 1 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
+        self.buy_all = 0 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
         self.buy_one = 0 # 买一只，并指定对应的价格
-        self.buy_all_force = 0 # 一定要保证买入所有（对应数量非常大的买入，且有很多高价股，均分值无法覆盖高价股）
+        self.buy_all_force = 1 # 一定要保证买入所有（对应数量非常大的买入，且有很多高价股，均分值无法覆盖高价股）
 
 class OrderTypeBuy:
     def __init__(self):
@@ -54,10 +54,10 @@ class StrategyInfo:
         self.A = 0
         self.AC = 0
         self.A1 = 0
-        self.AA = 0
+        self.AA = 1
         self.B = 0
         self.B1 = 0
-        self.BA = 1
+        self.BA = 0
         self.C = 0
         self.M = 0
 
@@ -90,7 +90,7 @@ class LoadedIDsInfo:
         # 加入变量，控制tick的处理次数，主要为了处理AA这种数量太多的情况，如果每次tick都处理，会造成很大的延迟，导致refresh卡很久
         # 像B这种少的话，我们就每次处理就好
         self.tick_cur_count = 0
-        self.tick_handle_frequence = 1
+        self.tick_handle_frequence = 2
 
         # 多次上涨后买入，相关配置参数
         self.enable_multi_up_buy_flag = False # 多次上涨才买入的启用开关
@@ -296,7 +296,6 @@ def load_ids(context):
     # 
     # 简化使用的话，就是6开头就都是上交所的，其他都是深交所（当然这种情况没有处理错误的存在）
     # SHSE(上交所), SZSE(深交所)
-
     # ！！！这里读取的配置文件，要根据策略改变
     file_obj = open(ids_path, 'r')
     lines = file_obj.readlines()
@@ -624,13 +623,14 @@ def update_sell_position_info(context, symbol, sell_flag, sell_price):
 def load_sell_position_info_with_init(context):
     context.sell_pos_dict = np.load(pos_info_path, allow_pickle=True) # 输出即为Dict类型
     context.sell_pos_dict = dict(context.sell_pos_dict.tolist())
-    #print("--------------------start load sell pos info")
-    #print(context.sell_pos_dict)
-    #print("--------------------end load sell pos info\n")
+    # print("--------------------start load sell pos info")
+    # print(context.sell_pos_dict)
+    # print("--------------------end load sell pos info\n")
 
     for k,v in context.sell_pos_dict.items():
         if (k in context.ids.keys()) and (context.ids[k].buy_flag == 0) and (k not in context.ids_virtual_sell_target_info_dict.keys()):
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
+        
 
 #change mark2
 def save_buy_info(context):
@@ -728,10 +728,10 @@ def init(context):
     #print(f'{context.now.strftime("%H:%M:%S")}')
     context.tick_count_for_statistics = 0 # 记录经过的tick次数，有些函数不需要每次tick都调用，会造成性能损耗，用这个变量进行控制
     context.tick_count_for_sell = 0 # 用于控制sell函数中一些消耗较大的代码块的运行频率
-    context.tick_count_limit_rate_for_sell = 0.2 # 具体的控制百分比（针对context.ids的长度），比如有1000标的，那么0.2就是20%，200只标的经过后，再运行一次
+    context.tick_count_limit_rate_for_sell = 0.5 # 具体的控制百分比（针对context.ids的长度），比如有1000标的，那么0.2就是20%，200只标的经过后，再运行一次
     context.tick_count_for_sell_ok = False # 记录当前是否满足频率，避免每次都要和rate做乘法后比较
     context.tick_count_for_buy = 0
-    context.tick_count_limit_rate_for_buy = 0.2
+    context.tick_count_limit_rate_for_buy = 0.5
     context.tick_count_for_buy_ok = False 
     context.get_all_sell_price_flag = False
     context.get_all_buy_price_flag = False
@@ -813,7 +813,6 @@ def init(context):
 
     # 手动产生buy_info的初始文件
     # save_buy_info(context)
-
     # 初始化动态加载的id文件--------
     load_ids(context)
 
@@ -824,7 +823,7 @@ def init(context):
     context.Buy_In_Up_Rate = 0.03
     add_parameter(key='Buy_In_Up_Rate', value=context.Buy_In_Up_Rate, min=-1, max=1, name='买入时上涨比例', intro='', group='1', readonly=False)
 
-    context.Buy_In_Limit_Num = 5
+    context.Buy_In_Limit_Num = 5000
     add_parameter(key='Buy_In_Limit_Num', value=context.Buy_In_Limit_Num, min=0, max=1, name='策略买入数量', intro='', group='1', readonly=False)
     context.Use_Close = 1
     add_parameter(key='Use_Close', value=context.Use_Close, min=0, max=1, name='是否使用昨收', intro='', group='1', readonly=False)
@@ -834,6 +833,8 @@ def init(context):
         context.Sell_Increase_Rate = 0.07
     elif context.strategy_info.BA == 1:
         context.Sell_Increase_Rate = 0.07
+    elif context.strategy_info.AA == 1:
+        context.Sell_Increase_Rate = 0.12
     add_parameter(key='Sell_Increase_Rate', value=context.Sell_Increase_Rate, min=-1, max=1, name='卖出时涨幅比例', intro='', group='2', readonly=False)
 
     context.Sell_Loss_Limit = -0.2
@@ -841,8 +842,8 @@ def init(context):
         context.Sell_Loss_Limit = -0.035
     elif context.strategy_info.BA == 1:
         context.Sell_Loss_Limit = -0.035
-    elif context.strategy_info.B1 == 1:
-        context.Sell_Loss_Limit = -0.065
+    elif context.strategy_info.AA == 1:
+        context.Sell_Loss_Limit = -0.04
     add_parameter(key='Sell_Loss_Limit', value=context.Sell_Loss_Limit, min=-1, max=1, name='止损比例', intro='', group='2', readonly=False)
 
     context.Sell_All_Increase_Rate = 0.2
@@ -855,12 +856,16 @@ def init(context):
         context.Sell_All_Increase_Rate = 0.0045
     elif context.strategy_info.A == 1:
         context.Sell_All_Increase_Rate = 0.0113
+    elif context.strategy_info.AA == 1:
+        context.Sell_All_Increase_Rate = 0.02
         
     context.Sell_All_Loss_Rate = -0.2
     if context.strategy_info.B == 1:
         context.Sell_All_Loss_Rate = -0.016
     elif context.strategy_info.BA == 1:
         context.Sell_All_Loss_Rate = -0.016
+    elif context.strategy_info.AA == 1:
+        context.Sell_All_Loss_Rate = -1.035
     add_parameter(key='Sell_All_Increase_Rate', value=context.Sell_All_Increase_Rate, min=-1, max=1, name='整体涨幅', intro='', group='2', readonly=False)
     add_parameter(key='Sell_All_Loss_Rate', value=context.Sell_All_Loss_Rate, min=-1, max=1, name='整体止损', intro='', group='2', readonly=False)
     # 取巧参数（参数赋值没有实际意义，只是用来重载ids配置文件），该参数变化后，重新load ids，重新订阅最新加载的ids
@@ -1604,6 +1609,7 @@ def try_sell_strategyA(context, tick):
             # 检测一下异常，目前出现的非常低的百分比不知道怎么回事，需要排查下
             if (context.tfpr <= -0.05) or (context.tfpr >= 0.1):
                 log(f"[sell][Fatal-Error] 出现异常总盈亏数据{round(total_float_profit_rate * 100, 3)}%, total_mv[{context.total_market_value_for_all_sell}] cur_mv[{cur_market_value}] sell_pos_dict_len[{len(context.sell_pos_dict)}] handle_len[{handle_count}]")
+
         # 更新和检测整体的追高情况（特定情况应该放弃追高卖出）
         if context.sell_all_chase_raise_flag:
             # 更新最高值
@@ -1740,6 +1746,7 @@ def try_sell_strategyA(context, tick):
 
 
 def try_buy_strategyB(context, tick):
+    t = time.time()
 
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
@@ -1762,6 +1769,8 @@ def try_buy_strategyB(context, tick):
 
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -1800,7 +1809,7 @@ def try_buy_strategyB(context, tick):
         limitBuyAmountFlag = True
     elif context.strategy_info.buy_mode.buy_all_force == 1:
         if not check_buy_all_force_flag(context):
-            #print(f"还未拿到强制买入所有标的的有效标识，先返回")
+            # #print(f"还未拿到强制买入所有标的的有效标识，先返回")
             return
         avgBuyAmount = context.ids_buy_target_info_dict[tick.symbol].fixed_buy_in_base_num * 100.0 * tick.price
 
@@ -1841,6 +1850,9 @@ def try_buy_strategyB(context, tick):
         
     pre_close = context.ids_buy_target_info_dict[tick.symbol].pre_close
     name = context.ids_buy_target_info_dict[tick.symbol].name
+
+    if context.test_info == 3:
+        print(f"buy time cost, pt2: {time.time() - t:.4f} s")
 
     # print(f"pre close {info.pre_close}")
     # print(f"test--------------[{tick.symbol} {info.empty}")
@@ -1901,6 +1913,9 @@ def try_buy_strategyB(context, tick):
     # 在合适的情况下输出剩余空间信息
     if (leftCash > left_space) and (enoughMoney1Hand):
         print(f'{tick.symbol} 涨跌幅：{round(rate * 100.0, 3)}% 最新价格：{tick.price} 剩余空间：{left_space} leftcash：{leftCash}')  
+
+    if context.test_info == 3:
+        print(f"buy time cost, pt3: {time.time() - t:.4f} s")
     
     if enoughMoney1Hand and (buyCondition1 or buyCondition2 or buyCondition3 or buyCondition4 or buyCondition5):
         market_value = 0 if (not pos) else pos.amount
@@ -2016,8 +2031,12 @@ def try_buy_strategyB(context, tick):
         # if tick.symbol in context.ids_buy:
         #     context.ids_buy.remove(tick.symbol)
 
+        if context.test_info == 3:
+            print(f"buy time cost, pt4: {time.time() - t:.4f} s")
+
 def try_sell_strategyB(context, tick):
     # 获取当前持仓
+    t = time.time()
     curHolding = 0
     # 这里的Side一定要标注正确，比如我是买入的脚本，里面有个都是使用的Buy类型
     # 验证了下，获取买入后的持仓都是Buy类型，不是我想象的sell就要获取sell类型，我估计期货才用这个
@@ -2061,6 +2080,9 @@ def try_sell_strategyB(context, tick):
     if curHolding == 0:
         return
 
+    # if context.test_info == 2:
+    #     print(f"sell time cost, pt1: {time.time() - t:.4f} s")
+
     leftCash = context.account().cash['available'] # 余额
     leftCash = float('%.2f' % leftCash)
     curVal1_5 = [tick.quotes[0]['bid_p'], tick.quotes[1]['bid_p'], tick.quotes[2]['bid_p'], tick.quotes[3]['bid_p'], tick.quotes[4]['bid_p']]
@@ -2089,6 +2111,9 @@ def try_sell_strategyB(context, tick):
         
     pre_close = context.ids_virtual_sell_target_info_dict[tick.symbol].pre_close
     name = context.ids_virtual_sell_target_info_dict[tick.symbol].name
+
+    # if context.test_info == 2:
+    #     print(f"sell time cost, pt2: {time.time() - t:.4f} s")
 
     #print(f"总资金{context.account().cash['nav']} 总市值{context.account().cash['market_value']} 总浮动盈亏{context.account().cash['fpnl']}")
     # 错误统计：总市值会受到已经卖出的标的干扰，比如卖出时时7%，但是后来到-7%了，这样计算整体的即使收益就有问题，所以我们必须在卖出后，要把卖出的票记录到缓存和文件中
@@ -2159,6 +2184,9 @@ def try_sell_strategyB(context, tick):
         #     context.lowest_total_float_profit_info[0] = total_float_profit_rate
         #     context.lowest_total_float_profit_info[1] = context.now
 
+
+    # if context.test_info == 2:
+    #     print(f"sell time cost, pt3: {time.time() - t:.4f} s")
     # 大于整体盈利卖出条件后，直接激活卖出条件（不再重置false）
     # false只在init时有一次，后续只要激活就全部卖出（只激活一次即可）
     # 只激活一次的策略，有可能带来了滑点严重的问题？？因为激活的瞬间，可能整体盈利还在抖动，所以导致一直有0.2%左右的差值？？所以需要改为反复激活，也就是激活后，也要保证后续的每只股卖出时都达到了整体收益？？（需要验证）
@@ -2214,6 +2242,9 @@ def try_sell_strategyB(context, tick):
     sell_condition9 = (now >= target_time_for_solo)
     sell_condition10 = (context.ids[tick.symbol].sell_with_num > 0)
 
+    if context.test_info == 2:
+        print(f"sell time cost, pt4: {time.time() - t:.4f} s")
+
     # 开始判断条件，并尝试卖出
     if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9 or sell_condition10:
         msg = f"\n-------->>开始尝试卖出[{tick.symbol}:{name}]，当前持仓量:{curHolding} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
@@ -2266,6 +2297,9 @@ def try_sell_strategyB(context, tick):
         # 需要一定的数据格式，记录在context全局变量中，这样不会被擦除
         # 数据信息：{symbol:[list_order]}，直接把list_order一下装进去吧，也不用费事单独拆一些数据了
         context.client_order[tick.symbol] = list_order
+
+        if context.test_info == 2:
+            print(f"sell time cost, pt5: {time.time() - t:.4f} s")
 
 
 def try_buy_strategyB1(context, tick):
@@ -2967,9 +3001,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.002
                 context.sell_all_chase_raise_flag = False
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.002
-                context.sell_all_chase_raise_flag = False
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.002
+            #     context.sell_all_chase_raise_flag = False
         # 非常好的情况，求高收益，向坐标轴右侧包含（注意下面也是右侧包含，所以要小心else的先后顺序）
         elif total_float_profit_rate > 0.003:
             if context.strategy_info.B == 1:
@@ -2978,9 +3012,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.01
                 context.sell_all_chase_raise_flag = True
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.01
-                context.sell_all_chase_raise_flag = True
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.01
+            #     context.sell_all_chase_raise_flag = True
         # 比较好的情况，求高收益，向坐标轴右侧包含
         elif total_float_profit_rate > -0.0015:
             if context.strategy_info.B == 1:
@@ -2989,9 +3023,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0075
                 context.sell_all_chase_raise_flag = True
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0075
-                context.sell_all_chase_raise_flag = True
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.0075
+            #     context.sell_all_chase_raise_flag = True
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
             if context.strategy_info.B == 1:
@@ -3000,9 +3034,9 @@ def info_statistics(context, tick):
             elif context.strategy_info.BA == 1:
                 context.Sell_All_Increase_Rate = 0.0066
                 context.sell_all_chase_raise_flag = False
-            elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
-                context.sell_all_chase_raise_flag = False
+            # elif context.strategy_info.AA == 1:
+            #     context.Sell_All_Increase_Rate = 0.0066
+            #     context.sell_all_chase_raise_flag = False
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
     target_time = datetime.datetime.strptime(str(context.now.date()) + "15:30", '%Y-%m-%d%H:%M')
@@ -3108,11 +3142,11 @@ def on_tick(context, tick):
                 context.ids_virtual_sell_target_info_dict[tick.symbol].vwap = pos.vwap
 
     # 根据设置的tick handle frequence来跳过tick的处理
-    # context.ids[tick.symbol].tick_cur_count += 1
-    # if context.ids[tick.symbol].tick_cur_count < context.ids[tick.symbol].tick_handle_frequence:
-    #     return
-    # else:
-    #     context.ids[tick.symbol].tick_cur_count = 0
+    context.ids[tick.symbol].tick_cur_count += 1
+    if context.ids[tick.symbol].tick_cur_count < context.ids[tick.symbol].tick_handle_frequence:
+        return
+    else:
+        context.ids[tick.symbol].tick_cur_count = 0
 
     # 检测是否已经记录所有的buy或者sell的price，这样后续流程就不用再浪费性能检测了，该过程激活一次就ok了（要注意refresh中重置flag，因为刷新可能ids变更）
     if (not context.get_all_buy_price_flag):
@@ -3162,6 +3196,7 @@ def on_tick(context, tick):
             print(f"卖出列表中存在无法获取price的情况[{invalid_sell_symbol}]，等待一段时间（30s）后仍然无法获取到的，需要从配置列表中删除，删除后手动重置配置文件中的mv到-1，然后再刷新")
         if context.test_info == 1:
             print(f"trade logic cost time with count limit------: {time.time() - t:.4f} s")
+        # print(f"trade logic cost time with count limit------: {time.time() - t:.4f} s")
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
     target_time = datetime.datetime.strptime(str(context.now.date()) + context.start_operation_time, '%Y-%m-%d%H:%M')
@@ -3369,6 +3404,7 @@ def on_account_status(context, account):
     if (account['status']['error']['code'] != 0):
         log(f"发生账号错误：{account['status']['error']['code']}！！！目前没有任何处理")
 
+
 if __name__ == '__main__':
     '''
         strategy_id策略ID, 由系统生成
@@ -3381,15 +3417,17 @@ if __name__ == '__main__':
         backtest_initial_cash回测初始资金
         backtest_commission_ratio回测佣金比例
         backtest_slippage_ratio回测滑点比例
+        backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='1457c400-f485-11ed-a1a9-005056bc063c',
+    run(strategy_id='1d0db45b-44df-11ef-8367-fa163e12d1f6',
         filename='main.py',
-        #mode=MODE_BACKTEST,
-        mode=MODE_LIVE,
+        mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',
         backtest_start_time='2020-11-01 08:00:00',
         backtest_end_time='2020-11-10 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=10000000,
         backtest_commission_ratio=0.0001,
-        backtest_slippage_ratio=0.0001)
+        backtest_slippage_ratio=0.0001,
+        backtest_match_mode=1)
+

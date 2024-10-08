@@ -1,5 +1,5 @@
 # coding=utf-8
-# ------------------测试策略BA
+# ------------------测试策略A
 # 相关指标：solo up 7% loss limit -3.5% total up 2% total sell time 13:35
 from __future__ import print_function, absolute_import
 from gm.api import *
@@ -14,11 +14,11 @@ import re
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
-def StrategyBA():
+def StrategyA():
     pass
 
 # 全局需要修改的变量，如果策略变化（比如买卖变化，策略本身变化）都应该调整下面的值
-str_strategy = 'BA'
+str_strategy = 'A'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path = 'c:\\TradeLogs\\IDs-' + str_strategy + '.txt'
 pos_info_path = 'c:\\TradeLogs\\Pos-' + str_strategy + '.npy'
@@ -27,13 +27,13 @@ buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
 order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
-sell_all_time = "13:35"
+sell_all_time = "15:35"
 
 class BuyMode:
     def __init__(self):
         # 注意每个策略下面只能设定一种对应的买入模式（也就是只有一种可以激活到1）！！
-        self.buy_all = 1 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
-        self.buy_one = 0 # 买一只，并指定对应的价格
+        self.buy_all = 0 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
+        self.buy_one = 1 # 买一只，并指定对应的价格
         self.buy_all_force = 0 # 一定要保证买入所有（对应数量非常大的买入，且有很多高价股，均分值无法覆盖高价股）
 
 class OrderTypeBuy:
@@ -51,13 +51,13 @@ class OrderTypeSell:
 class StrategyInfo:
     def __init__(self):
         # 指定策略对应的模式，策略A就对应A=1，一次只能激活一种策略！！
-        self.A = 0
+        self.A = 1
         self.AC = 0
         self.A1 = 0
         self.AA = 0
         self.B = 0
         self.B1 = 0
-        self.BA = 1
+        self.BA = 0
         self.C = 0
         self.M = 0
 
@@ -231,6 +231,7 @@ def refresh(context):
             amount = (pos.available_now * pos.vwap) if pos else 0
             context.total_market_value_for_all_sell += amount
         
+        print(f"second time in total mv pt0, mv[{context.total_market_value_for_all_sell}]")
         if context.total_market_value_for_all_sell > 0:
             over_write_mv(context.total_market_value_for_all_sell)
             save_sell_position_info_with_init(context)
@@ -243,7 +244,8 @@ def refresh(context):
     #         amount = (pos.available_now * pos.vwap) if pos else 0
     #         tmp_total_market_value_for_all_sell += amount
 
-    #     if (tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell) and (tmp_total_market_value_for_all_sell > 0):
+    #     print(f"second time in total mv pt1, mv[{context.total_market_value_for_all_sell}] mv2[{tmp_total_market_value_for_all_sell}]")
+    #     if tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell:
     #         context.total_market_value_for_all_sell = tmp_total_market_value_for_all_sell
     #         over_write_mv(context.total_market_value_for_all_sell)
     #         save_sell_position_info_with_init(context)
@@ -813,7 +815,6 @@ def init(context):
 
     # 手动产生buy_info的初始文件
     # save_buy_info(context)
-
     # 初始化动态加载的id文件--------
     load_ids(context)
 
@@ -829,14 +830,14 @@ def init(context):
     context.Use_Close = 1
     add_parameter(key='Use_Close', value=context.Use_Close, min=0, max=1, name='是否使用昨收', intro='', group='1', readonly=False)
     # 卖出参数
-    context.Sell_Increase_Rate = 0.2
+    context.Sell_Increase_Rate = 1000.2 # 设置上限为不可能达到的值，防止自动达标卖出
     if context.strategy_info.B == 1:
         context.Sell_Increase_Rate = 0.07
     elif context.strategy_info.BA == 1:
         context.Sell_Increase_Rate = 0.07
     add_parameter(key='Sell_Increase_Rate', value=context.Sell_Increase_Rate, min=-1, max=1, name='卖出时涨幅比例', intro='', group='2', readonly=False)
 
-    context.Sell_Loss_Limit = -0.2
+    context.Sell_Loss_Limit = -1000.2
     if context.strategy_info.B == 1:
         context.Sell_Loss_Limit = -0.035
     elif context.strategy_info.BA == 1:
@@ -845,7 +846,7 @@ def init(context):
         context.Sell_Loss_Limit = -0.065
     add_parameter(key='Sell_Loss_Limit', value=context.Sell_Loss_Limit, min=-1, max=1, name='止损比例', intro='', group='2', readonly=False)
 
-    context.Sell_All_Increase_Rate = 0.2
+    context.Sell_All_Increase_Rate = 1000.2
     context.sell_all_chase_raise_flag = False
     context.sell_all_chase_highest_record = -1.0
     context.sell_all_lower_limit = 0.0066
@@ -853,10 +854,10 @@ def init(context):
         context.Sell_All_Increase_Rate = 0.0066
     elif context.strategy_info.BA == 1:
         context.Sell_All_Increase_Rate = 0.0045
-    elif context.strategy_info.A == 1:
-        context.Sell_All_Increase_Rate = 0.0113
+    # elif context.strategy_info.A == 1:
+    #     context.Sell_All_Increase_Rate = 0.0113
         
-    context.Sell_All_Loss_Rate = -0.2
+    context.Sell_All_Loss_Rate = -1000.2
     if context.strategy_info.B == 1:
         context.Sell_All_Loss_Rate = -0.016
     elif context.strategy_info.BA == 1:
@@ -924,6 +925,7 @@ def init(context):
     for k in del_keys:
         del context.ids_virtual_sell_target_info_dict[k]
 
+    print(f"init before calc total mv, [{context.calculate_total_market_value_flag}]")
     # ------看是否需要重新统计卖出票的总市值（注意是卖出票，不含买入）
     # 即便设置不是-1，我们也应该检查一次（我之前就误操作，前一天下午开过脚本，忘记重置-1，结果load的都是昨天的sell，导致今天的脚本完全无法正常运行）
     if context.calculate_total_market_value_flag:
@@ -933,6 +935,7 @@ def init(context):
             amount = (pos.available_now * pos.vwap) if pos else 0
             context.total_market_value_for_all_sell += amount
         
+        print(f"first time in total mv pt0, mv[{context.total_market_value_for_all_sell}]")
         if context.total_market_value_for_all_sell > 0:
             over_write_mv(context.total_market_value_for_all_sell)
             save_sell_position_info_with_init(context)
@@ -945,7 +948,8 @@ def init(context):
     #         amount = (pos.available_now * pos.vwap) if pos else 0
     #         tmp_total_market_value_for_all_sell += amount
 
-    #     if (tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell) and (tmp_total_market_value_for_all_sell > 0):
+    #     print(f"first time in total mv pt1, mv[{context.total_market_value_for_all_sell}] mv2[{tmp_total_market_value_for_all_sell}]")
+    #     if tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell:
     #         context.total_market_value_for_all_sell = tmp_total_market_value_for_all_sell
     #         over_write_mv(context.total_market_value_for_all_sell)
     #         save_sell_position_info_with_init(context)
@@ -1022,13 +1026,12 @@ def reach_time(context, target_time):
 
     return (now >= target_time)
 
-
 def check_multi_up_flag(context, tick, rate, buy_in_up_rate):
     # 检测多次上涨后买入相关逻辑
     # 逻辑略微有点复杂，我们的多次上涨检测，需要检测是否超过目标值，超过的话，则计数count+=1
     # 且反转检测标记，开始检测是否低于目标值，低于以后，再次反转，准备检测下一次超过目标值，然后计数继续加1
     multi_up_buy_complete = True # 默认为已完成，在下列流程中修改（流程不开启的话，也是默认完成）
-    
+
     if context.ids[tick.symbol].enable_multi_up_buy_flag:
         # 次数不等，就还需要进一步检测
         # 暂时用不到总次数了，注释记录一下，不过后面可能会用
@@ -1762,6 +1765,8 @@ def try_buy_strategyB(context, tick):
 
     # 检测持仓取值是否出现问题（有小概率出现，部成的值已经记录，且大于这里取出的持仓），还是需要处理
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
@@ -3069,7 +3074,7 @@ def info_statistics(context, tick):
 
         market_value = context.account().cash['market_value'] # 市值，因为之前好像出现了统计错误，这里记录下收盘后的市值，有需要可以核算
         log(f"收盘后的持仓市值为：{market_value}")
-        
+
         # 3点的时候重置整个sell相关的信息，主要是配置文件中的mv改到-1，这个核心值可以控制整个卖出流程
         context.total_market_value_for_all_sell = 0 # 只记录一次就ok
         over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
@@ -3337,7 +3342,7 @@ def on_order_status(context, order):
 
         # 撤销订单的时候，应该把已经完成的partial加总到总持仓里面，并重置partial到0（避免下次撤销时，并没有partial完成的情况下，依然有非0值）
         if (order.side == OrderSide_Buy) and (order.symbol in context.ids_buy_target_info_dict.keys()):
-            context.ids_buy_target_info_dict[order.symbol].total_holding += context.ids_buy_target_info_dict[order.symbol].partial_holding 
+            context.ids_buy_target_info_dict[order.symbol].total_holding += context.ids_buy_target_info_dict[order.symbol].partial_holding
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
 
@@ -3381,15 +3386,17 @@ if __name__ == '__main__':
         backtest_initial_cash回测初始资金
         backtest_commission_ratio回测佣金比例
         backtest_slippage_ratio回测滑点比例
+        backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='1457c400-f485-11ed-a1a9-005056bc063c',
+    run(strategy_id='b61bd7b5-44d9-11ef-8367-fa163e12d1f6',
         filename='main.py',
-        #mode=MODE_BACKTEST,
-        mode=MODE_LIVE,
+        mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',
         backtest_start_time='2020-11-01 08:00:00',
         backtest_end_time='2020-11-10 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=10000000,
         backtest_commission_ratio=0.0001,
-        backtest_slippage_ratio=0.0001)
+        backtest_slippage_ratio=0.0001,
+        backtest_match_mode=1)
+

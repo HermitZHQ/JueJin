@@ -1,5 +1,5 @@
 # coding=utf-8
-# ------------------测试策略BA
+# ------------------测试策略X
 # 相关指标：solo up 7% loss limit -3.5% total up 2% total sell time 13:35
 from __future__ import print_function, absolute_import
 from gm.api import *
@@ -14,11 +14,11 @@ import re
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
-def StrategyBA():
+def StrategyX():
     pass
 
 # 全局需要修改的变量，如果策略变化（比如买卖变化，策略本身变化）都应该调整下面的值
-str_strategy = 'BA'
+str_strategy = 'X'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path = 'c:\\TradeLogs\\IDs-' + str_strategy + '.txt'
 pos_info_path = 'c:\\TradeLogs\\Pos-' + str_strategy + '.npy'
@@ -26,7 +26,7 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
+order_overtime = 6 # 设置的委托超时时间，超时后撤单，单位秒
 sell_all_time = "13:35"
 
 class BuyMode:
@@ -55,9 +55,9 @@ class StrategyInfo:
         self.AC = 0
         self.A1 = 0
         self.AA = 0
-        self.B = 0
+        self.B = 1
         self.B1 = 0
-        self.BA = 1
+        self.BA = 0
         self.C = 0
         self.M = 0
 
@@ -848,9 +848,10 @@ def init(context):
     context.Sell_All_Increase_Rate = 0.2
     context.sell_all_chase_raise_flag = False
     context.sell_all_chase_highest_record = -1.0
-    context.sell_all_lower_limit = 0.0066
+    context.default_sell_all_increase_rate = 0.008
+    context.sell_all_lower_limit = context.default_sell_all_increase_rate
     if context.strategy_info.B == 1:
-        context.Sell_All_Increase_Rate = 0.0066
+        context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
     elif context.strategy_info.BA == 1:
         context.Sell_All_Increase_Rate = 0.0045
     elif context.strategy_info.A == 1:
@@ -1210,7 +1211,6 @@ def check_buy_all_force_flag(context):
 
 
 def try_buy_strategyA(context, tick):
-
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
         #print(f'{tick.symbol}订单没有处理完毕，直接返回')
@@ -1764,6 +1764,8 @@ def try_buy_strategyB(context, tick):
     if curHolding < context.ids_buy_target_info_dict[tick.symbol].total_holding:
         #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
         curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
+        #log(f"[Warning][{tick.symbol}]出现了仓位{curHolding}刷新不及时问题，已通过记录数据更新到{context.ids_buy_target_info_dict[tick.symbol].total_holding}")
+        curHolding = context.ids_buy_target_info_dict[tick.symbol].total_holding
 
     # 股票提供买卖5档数据, list[0]~list[4]分别对应买卖一档到五档
     #print(f"买卖信息：{tick.quotes[0]['bid_p']} {tick.quotes[1]['bid_p']} {tick.quotes[2]['bid_p']} {tick.quotes[3]['bid_p']} {tick.quotes[4]['bid_p']}---- cur val{tick.price}")
@@ -1778,7 +1780,6 @@ def try_buy_strategyB(context, tick):
     # if (curHoldTypeNum >= totalBuyNum):
     #     return
 
-    # 跳过集合竞价的不正常价格区间
     if (tick.price == 0):
         return
     
@@ -2995,13 +2996,13 @@ def info_statistics(context, tick):
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
             if context.strategy_info.B == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
             elif context.strategy_info.BA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
             elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
@@ -3369,6 +3370,7 @@ def on_account_status(context, account):
     if (account['status']['error']['code'] != 0):
         log(f"发生账号错误：{account['status']['error']['code']}！！！目前没有任何处理")
 
+
 if __name__ == '__main__':
     '''
         strategy_id策略ID, 由系统生成
@@ -3381,15 +3383,17 @@ if __name__ == '__main__':
         backtest_initial_cash回测初始资金
         backtest_commission_ratio回测佣金比例
         backtest_slippage_ratio回测滑点比例
+        backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='1457c400-f485-11ed-a1a9-005056bc063c',
+    run(strategy_id='65a998f2-44df-11ef-8367-fa163e12d1f6',
         filename='main.py',
-        #mode=MODE_BACKTEST,
-        mode=MODE_LIVE,
+        mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',
         backtest_start_time='2020-11-01 08:00:00',
         backtest_end_time='2020-11-10 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=10000000,
         backtest_commission_ratio=0.0001,
-        backtest_slippage_ratio=0.0001)
+        backtest_slippage_ratio=0.0001,
+        backtest_match_mode=1)
+

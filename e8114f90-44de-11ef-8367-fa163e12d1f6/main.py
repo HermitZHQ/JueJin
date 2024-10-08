@@ -3369,6 +3369,7 @@ def on_account_status(context, account):
     if (account['status']['error']['code'] != 0):
         log(f"发生账号错误：{account['status']['error']['code']}！！！目前没有任何处理")
 
+
 if __name__ == '__main__':
     '''
         strategy_id策略ID, 由系统生成
@@ -3381,15 +3382,17 @@ if __name__ == '__main__':
         backtest_initial_cash回测初始资金
         backtest_commission_ratio回测佣金比例
         backtest_slippage_ratio回测滑点比例
+        backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='1457c400-f485-11ed-a1a9-005056bc063c',
+    run(strategy_id='e8114f90-44de-11ef-8367-fa163e12d1f6',
         filename='main.py',
-        #mode=MODE_BACKTEST,
-        mode=MODE_LIVE,
+        mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',
         backtest_start_time='2020-11-01 08:00:00',
         backtest_end_time='2020-11-10 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=10000000,
         backtest_commission_ratio=0.0001,
-        backtest_slippage_ratio=0.0001)
+        backtest_slippage_ratio=0.0001,
+        backtest_match_mode=1)
+
