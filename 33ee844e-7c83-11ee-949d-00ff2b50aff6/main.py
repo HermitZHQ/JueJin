@@ -3233,7 +3233,7 @@ def check_unfinished_orders(context, tick):
 
     for order in unfinished_orders:
         # 没有设置脚本的指定买入或者卖出价格的时候，我们才自动取消订单，否则就挂着（这种情况需要人工取消订单）
-        if (context.ids[order.symbol].sell_with_price == 0 and context.ids[order.symbol].buy_with_price == 0) and ((context.now - order.created_at).seconds > order_overtime):
+        if (order.symbol in context.ids.keys() and context.ids[order.symbol].sell_with_price == 0 and context.ids[order.symbol].buy_with_price == 0) and ((context.now - order.created_at).seconds > order_overtime):
             if order.symbol in context.ids_virtual_sell_target_info_dict.keys():
                 log(f"{order.symbol}:{context.ids_virtual_sell_target_info_dict[order.symbol].name} 委托已经超时！！开始取消订单--------")
             elif order.symbol in context.ids_buy_target_info_dict.keys():
