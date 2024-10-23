@@ -21,15 +21,32 @@ OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时�
 OP_ID_S2C_MIN_REAL_TIME_DATA_SEND = 105 # 新版,当前分钟实时数据
 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
 OP_ID_S2C_PERCENT_TODAY_DATA_SEND = 107 # 新版，中途或者关盘后开启，当日次时段之前的对比数据
+OP_ID_S2C_PERIOD_AMOUNT_SEND = 108 # 当前时段昨日与今日数据总量发送
 
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
 OP_ID_C2S_SELECT_STOCK_SHOW = 130 # 处于搜索中标的，且没有达标的标的，依然显示数据(没有达标，服务器不会发送数据)
 OP_ID_C2S_TOP_STOCK_SHOW = 131 # 处于置顶中标的，且没有达标的标的，依然显示数据(原先是没有达标，服务器不会发送数据)
+OP_ID_C2S_PERIOD_AMONT_SHOW = 132 # 弹窗，显示该只标的当前时段的今日与昨天历史总量对比
+
+
+class SystemMonitorAttributeInfo():
+    def __init__(self):
+        self.order_time = ""
+        self.order_index_by_time = 0 # 新排序，根据标的来的消息的顺序，进行排序，注意：每个灵活时间段此index需要重置
+        self.current_page_index = 0 # 当前页面下标
+
+        self.stock_hide_title_arr = ["688"] # 配合下面集合使用，取各类标的代码前3位，例如需要隐藏688开头代码，就添加688进此集合
+        self.stock_hide_arr = [] # 隐藏标的集合
+        self.show_period_amount_stock_arr = [] # 服务器返回的查看当前标的数据对比的标的代码
+
+        self.hafway_sort_dic = {} # 中途或者盘后开启排序用，<agility_time, agility_time_arr<dic<symbol, percent, eob_time>>>
 
 class AllStockAllTimeInfo():
     def __init__(self, symbol):
         self.symbol = symbol
+        self.history_period_amount = 0 # 当前时刻历史数据总量
+        self.today_period_amount = 0 # 当前时刻今日数据总量
         self.history_amount = {} # 所有历史数据， key<min>, value<history_amount>
         self.history_agility_amount = {} # 所有历史数据， key<agility_min>, value<history_agility_amount>
         self.all_min_percent = {} # 当天所有所分钟数，对比数据,  key<min>, value<min_percent>, 即便服务器没过来数据，也会有为0.0的数据，方便排序
@@ -40,6 +57,10 @@ class AllStockAllTimeInfo():
         self.last_agility_refresh_eob = '' # 上一次灵活分钟数刷新时间，用于判断是否该加进w5中
         self.min_percent_label_arr = [] # 分钟数达标数据label集合
         self.agility_percent_label_arr = [] # 灵活时间达标数据label集合
+
+        self.time_order_index = 0 # 根据该标的来的时间顺序排序，当前时间点的位置
+        self.time_order_last_index = 0 # 上一个时间点的位置
+        self.time_order_agility_time = "" # 当前排序灵活时间段
 
 class OderStockState():
     def __init__(self, symbol, eob, is_order):
@@ -90,6 +111,7 @@ class TestClientUI(QMainWindow):
     has_init_stock_name_single = pyqtSignal(bool)
     has_refresh_data_single = pyqtSignal(bool)
     has_init_halfway_info_single = pyqtSignal(bool) # 用于中途开启，初始化中途开启数据，只存储数据以及创建label，但不添加进layout
+    has_show_period_amount_single = pyqtSignal(bool) # 显示该标的当前今日数据总量与昨日历史数据总量对比窗口
 
     def __init__(self):  
         super().__init__()  
@@ -117,7 +139,7 @@ class TestClientUI(QMainWindow):
         self.update_scrollArea_current_time = 0
         self.update_scrollArea_last_time = 0
         self.refresh_stork_count = 40 # 设置排列于最前面的固定数量标的数据
-        self.page_show_count = 5 # 分页显示数量
+        self.page_show_count = 10 # 分页显示数量
         self.win_list = {}
         self.is_can_statistics = False
         self.is_can_ready_statistics = False
@@ -174,6 +196,8 @@ class TestClientUI(QMainWindow):
 
         self.test_index = 0
 
+        self.system_monitor_attribute = SystemMonitorAttributeInfo()
+
         # 定时器，用于刷新scrollbar
         self.timer = 0
         self.timer_init_flag = False
@@ -193,6 +217,7 @@ class TestClientUI(QMainWindow):
         self.has_init_stock_name_single.connect(self.init_window_stork_name)
         self.has_refresh_data_single.connect(self.update_label_for_single_new)
         self.has_init_halfway_info_single.connect(self.init_halfway_info_single)
+        self.has_show_period_amount_single.connect(self.show_period_amount_window_single)
 
         # self.load_history_from_file()
 
@@ -200,7 +225,7 @@ class TestClientUI(QMainWindow):
         self.connect_server()
 
     # 初始化该标的，所有时间段的数据(0.0)，包括灵活时间段
-    def init_all_stock_info(self, symbol_id):
+    def init_stock_info(self, symbol_id):
 
         is_replenish = False
         temp_his_begin_time = ""
@@ -209,6 +234,8 @@ class TestClientUI(QMainWindow):
 
         is_estimate_init = False
         temp_estimate_arr = []
+
+        
 
         for i in range(2):
 
@@ -410,6 +437,12 @@ class TestClientUI(QMainWindow):
 
         client_socket.sendall(mac_address_json.encode('utf-8'))
 
+    # 向服务器发送显示对比总量的标的id
+    def send_to_server_show_period_amount(self, client_socket, symbol):
+        buy_id = int(symbol)
+        # 4+4 = 8
+        client_socket.sendall(OP_ID_C2S_PERIOD_AMONT_SHOW.to_bytes(4) + int(buy_id).to_bytes(4))
+
     # 向服务器发送处于置顶中的id
     def send_to_server_top_stock(self, client_socket):
         input_box_str = self.input_box_search.text()
@@ -608,6 +641,10 @@ class TestClientUI(QMainWindow):
         self.content_widget_layout.addWidget(self.w6.overall_widget, 1, alignment=Qt.AlignmentFlag.AlignLeft)
         content_label = QLabel(f'当日成交金额', self.w6.up_contnet_widget)
         self.w6.up_contnet_widget_layout.addWidget(content_label)
+        #____添加w6里最上方的功能模块
+        self.input_box_period_show = QLineEdit(self)
+        self.input_box_period_show.returnPressed.connect(lambda: self.w6_show_period_amount(self.input_box_period_show))
+        self.w6.top_function_widget_layout.addWidget(self.input_box_period_show)
         
         #将所有容器添加到集合中，方便后续调用
         self.child_widget_arr.append(self.w1)
@@ -710,6 +747,89 @@ class TestClientUI(QMainWindow):
         # 这里直接返回一个数组
         return temp_h_m_s
 
+    # 新置顶功能
+    def put_on_top_order_new(self, symbol):
+
+        # print(f"put on top:{symbol}")
+
+        # 先判断是不是屏蔽的标的
+        if symbol in self.system_monitor_attribute.stock_hide_arr:
+            self.put_on_top_ban_stock(symbol)
+            return
+
+        temp_on_top_index = 0
+        # 需要-1，这个在上一层函数就添加进去了，所以要减去自身的个数
+        top_arr_length = len(self.top_stock_arr) - 1
+
+        if symbol in self.top_stock_arr:
+            temp_on_top_index += top_arr_length
+            # 当添加到置顶后，之后所有刷新的标的位置都需要往后移一个位置
+            # 这个地方+1好像有问题，但是下面出集合应该还是需要-1
+            self.system_monitor_attribute.order_index_by_time += 1
+
+            # 找出该标的当前所在位置
+            find_widget = self.child_widget_arr[0].stock_widget_dic[symbol].widget
+            find_current_index = self.child_widget_arr[0].bottom_update_widget_layout.indexOf(find_widget)
+
+            # 记录找到的该位置，方便取消置顶后，还原其位置
+            self.all_stock_all_time_info[symbol].time_order_last_index = find_current_index
+        else:
+            # 取消制动，回到先前的位置
+            temp_on_top_index = self.all_stock_all_time_info[symbol].time_order_last_index
+            # 进置顶集合时+1，出集合时-1
+            self.system_monitor_attribute.order_index_by_time -= 1
+            # 重置该标的排序次数
+            self.all_stock_all_time_info[symbol].time_order_agility_time = ""
+            # 重置用于原本位置矫正集合
+            # 这里需要判断一下，在置顶中的集合里，有多少个标的的原本位置是在该标的原本位置之后，如果在它之后，需要+1，否则
+            # 取消置顶后，该标的位置会提前一个位置
+            temp_current_symbol_last_index = self.all_stock_all_time_info[symbol].time_order_last_index
+            for top_symbol in self.top_stock_arr:
+                # 上一层的函数已经取消了当前标的在该集合中，所以不需要判断当前标的还是否在top这个集合
+                # 还需添加一个判断，在该标的置顶之前，有多少个原本位置是在该标的之后，且比该标的先添加进置顶集合
+                # 如果有，就不做+1
+                temp_other_symbol_last_index = self.all_stock_all_time_info[top_symbol].time_order_last_index 
+
+                # 这里同时需要满足2个条件，一个是其他标的位置在此标的位置之后。一个是不能在before_self_in_top此集合中
+                if temp_other_symbol_last_index > temp_current_symbol_last_index and top_symbol not in self.all_stock_all_time_info[symbol].before_self_in_top:
+                    temp_on_top_index += 1
+                    print(f"+1")
+
+                # 顺便删除自己，在其他标的中的before_self_in_top集合中的自己
+                if symbol in self.all_stock_all_time_info[top_symbol].before_self_in_top:
+                    self.all_stock_all_time_info[top_symbol].before_self_in_top.remove(symbol)
+                    # 还需要加入其他标的中的移除集合
+                    self.all_stock_all_time_info[top_symbol].remove_before_self_in_top.append(symbol)
+
+            # 这里还需要判断，移除置顶集合中，是否有标的是在自己原本位置之后，如果是，需要-1
+            for remove_symbol in self.all_stock_all_time_info[symbol].remove_before_self_in_top:
+
+                is_hide_stock = False
+                if remove_symbol in self.system_monitor_attribute.stock_hide_arr:
+                    is_hide_stock = True
+                else:
+                    temp_remove_symbol_last_index = self.all_stock_all_time_info[remove_symbol].time_order_last_index
+
+                # 添加一个判断条件，移除集合中，是否有标的是屏蔽的标的，如果有直接-1就好
+                if is_hide_stock or temp_remove_symbol_last_index >= self.all_stock_all_time_info[symbol].time_order_last_index:
+                    temp_on_top_index -= 1
+                    print(f"-1")
+                
+            # 最后清空用于矫正位置的集合
+            self.all_stock_all_time_info[symbol].before_self_in_top.clear()
+            self.all_stock_all_time_info[symbol].remove_before_self_in_top.clear()
+
+
+        for child_widget in self.child_widget_arr:
+            # 找到该标的widget
+            remove_widget = child_widget.stock_widget_dic[symbol].widget
+            # 找到该标的所在的layout的下标
+            remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+            # 从此下标移除
+            child_widget.bottom_update_widget_layout.takeAt(remove_index)
+            # 插入到所在位置
+            child_widget.bottom_update_widget_layout.insertWidget(temp_on_top_index, remove_widget)
+
     #置顶功能
     def put_on_top_order(self, symbol):
 
@@ -789,6 +909,21 @@ class TestClientUI(QMainWindow):
 
         temp_for_select_stork_index += 1
 
+    # w6中，显示当前时段今日与昨日历史总量对比
+    def w6_show_period_amount(self, line_edit):
+        target_stork = line_edit.text()
+
+        print(f"{target_stork}")
+        symbol = ""
+
+        if target_stork not in self.simple_stock_with_stock.keys():
+            return
+        else:
+            symbol = self.simple_stock_with_stock[target_stork]
+
+        symbol_arr = symbol.split(".")
+        self.send_to_server_show_period_amount(self.server_sokcet, symbol_arr[1])
+
     #w1中，搜索置顶
     def w1_put_on_top(self, line_edit):
         target_stork = line_edit.text()
@@ -819,7 +954,8 @@ class TestClientUI(QMainWindow):
                 child_widget.stock_widget_dic[symbol].widget.setStyleSheet("QWidget { border: 1px solid red; }")
 
         # 这里添加排序一下
-        self.put_on_top_order(symbol)
+        # self.put_on_top_order(symbol)
+        self.put_on_top_order_new(symbol)
         # 向服务器发送选中的标的，添加/取消服务器中置顶标的
         self.send_to_server_top_stock(self.server_sokcet)
 
@@ -912,8 +1048,6 @@ class TestClientUI(QMainWindow):
     def init_halfway_info_single(self):
         print(f"begin init halfway data info")
 
-        temp_lastest_eob = ""
-
         for key, value in self.wait_for_update_dic.items():
             if key == "w2":
                 for item in value:
@@ -922,77 +1056,101 @@ class TestClientUI(QMainWindow):
                 
             elif key == "w4":
                 for item in value:
-                    # self.update_w4_label(item["symbol"], item["percent"], item["eob_time"])
-
-                    symbol = item["symbol"]
-                    percent = item["percent"]
-                    eob = item["eob_time"]
-
-                    if eob not in self.w5.stock_time_labelinfo_dic[symbol].keys():
-                        data_label = self.create_label_with_percent(eob, percent, self.w5.stock_widget_dic[symbol].widget)
-                        data_label.setStyleSheet('QLabel { color: red; }')  
-
-                        stock_info = StockTimeLbelInfo(data_label, percent, eob)
-                        self.w5.stock_time_labelinfo_dic[symbol][eob] = stock_info
-
-                        # 注释掉，分页中，中途开启，只初始化，但不添加进layout
-                        # 并且新建一个arr，存储已达标且创建好了的label
-                        self.w5.stock_widget_dic[symbol].layout.addWidget(data_label)
-
-                        self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
-                        self.all_stock_all_time_info[symbol].agility_percent_label_arr.append(data_label)
-
-                        print(f"{symbol}|{len(self.all_stock_all_time_info[symbol].agility_percent_label_arr)}|{eob}|{percent}")
-
-                    else:
-                        self.w5.stock_time_labelinfo_dic[symbol][eob].percent = percent
-                        self.w5.stock_time_labelinfo_dic[symbol][eob].label.setText(f'{eob}\n{percent}%')
-
-                    # 记录最晚一次时间，取出来，好在下方进行排序
-                    if temp_lastest_eob == "":
-                        temp_lastest_eob = eob
-                    else:
-                        # 判断哪一条数据，为最晚刷新且达标的数据
-                        t_l = datetime.strptime(temp_lastest_eob, "%H:%M:%S").time()
-                        t_c = datetime.strptime(eob, "%H:%M:%S").time()
-                        if t_c > t_l:
-                            temp_lastest_eob = eob
-
+                    self.update_w4_label(item["symbol"], item["percent"], item["eob_time"])
                 self.wait_for_update_dic["w4"].clear()
 
-        # temp_lastest_eob,还需要判断一下如果过早启动，或者没有一条达标数据时，时间的选择
-        print(f"============{temp_lastest_eob}")
-        if temp_lastest_eob == "":
-            temp_lastest_eob = "09:25:00"
+        #================================================================================================
 
-        # 进行重新排序，并且显示第一页所有标的数据
-        for temp_symbol in self.symbol_arr:
-            self.order_widget_dic[temp_symbol] = float(self.all_stock_all_time_info[temp_symbol].all_agility_percent[self.estimate_dic[temp_lastest_eob]])
-        # 根据选出的时间重新排次序
-        sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
+        # temp_lastest_eob = ""
 
-        for key, val in sorted_items_desc:
-            self.page_show_symbol_arr.append(key)
-            if len(self.page_show_symbol_arr) == self.page_show_count:
-                break
+        # for key, value in self.wait_for_update_dic.items():
+        #     if key == "w2":
+        #         for item in value:
+        #             self.update_w2_label(item["symbol"], item["percent"], item["eob_time"])
+        #         self.wait_for_update_dic["w2"].clear()
+                
+        #     elif key == "w4":
+        #         for item in value:
+        #             # self.update_w4_label(item["symbol"], item["percent"], item["eob_time"])
 
-        for page_symbol in self.page_show_symbol_arr:
-            for child_widget in self.child_widget_arr:
-                # # 找到该标的widget
-                # remove_widget = child_widget.stock_widget_dic[symbol].widget
-                # # 找到该标的所在的layout的下标
-                # remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
-                # # 从此下标移除
-                # child_widget.bottom_update_widget_layout.takeAt(remove_index)
-                # # 插入到所在位置
-                # child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
+        #             symbol = item["symbol"]
+        #             percent = item["percent"]
+        #             eob = item["eob_time"]
 
-                #==================
-                child_widget.bottom_update_widget_layout.addWidget(child_widget.stock_widget_dic[page_symbol].widget)
+        #             if eob not in self.w5.stock_time_labelinfo_dic[symbol].keys():
+        #                 data_label = self.create_label_with_percent(eob, percent, self.w5.stock_widget_dic[symbol].widget)
+        #                 data_label.setStyleSheet('QLabel { color: red; }')  
+
+        #                 stock_info = StockTimeLbelInfo(data_label, percent, eob)
+        #                 self.w5.stock_time_labelinfo_dic[symbol][eob] = stock_info
+
+        #                 # 注释掉，分页中，中途开启，只初始化，但不添加进layout
+        #                 # 并且新建一个arr，存储已达标且创建好了的label
+        #                 self.w5.stock_widget_dic[symbol].layout.addWidget(data_label)
+
+        #                 self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
+        #                 self.all_stock_all_time_info[symbol].agility_percent_label_arr.append(data_label)
+
+        #                 print(f"{symbol}|{len(self.all_stock_all_time_info[symbol].agility_percent_label_arr)}|{eob}|{percent}")
+
+        #             else:
+        #                 self.w5.stock_time_labelinfo_dic[symbol][eob].percent = percent
+        #                 self.w5.stock_time_labelinfo_dic[symbol][eob].label.setText(f'{eob}\n{percent}%')
+
+        #             # 记录最晚一次时间，取出来，好在下方进行排序
+        #             if temp_lastest_eob == "":
+        #                 temp_lastest_eob = eob
+        #             else:
+        #                 # 判断哪一条数据，为最晚刷新且达标的数据
+        #                 t_l = datetime.strptime(temp_lastest_eob, "%H:%M:%S").time()
+        #                 t_c = datetime.strptime(eob, "%H:%M:%S").time()
+        #                 if t_c > t_l:
+        #                     temp_lastest_eob = eob
+
+        #         self.wait_for_update_dic["w4"].clear()
+
+        # # temp_lastest_eob,还需要判断一下如果过早启动，或者没有一条达标数据时，时间的选择
+        # print(f"============{temp_lastest_eob}")
+        # if temp_lastest_eob == "":
+        #     temp_lastest_eob = "09:25:00"
+
+        # # 进行重新排序，并且显示第一页所有标的数据
+        # for temp_symbol in self.symbol_arr:
+        #     self.order_widget_dic[temp_symbol] = float(self.all_stock_all_time_info[temp_symbol].all_agility_percent[self.estimate_dic[temp_lastest_eob]])
+        # # 根据选出的时间重新排次序
+        # sorted_items_desc = sorted(self.order_widget_dic.items(), key=lambda item: item[1], reverse=True)
+
+        # for key, val in sorted_items_desc:
+        #     self.page_show_symbol_arr.append(key)
+        #     if len(self.page_show_symbol_arr) == self.page_show_count:
+        #         break
+
+        # for page_symbol in self.page_show_symbol_arr:
+        #     for child_widget in self.child_widget_arr:
+        #         # # 找到该标的widget
+        #         # remove_widget = child_widget.stock_widget_dic[symbol].widget
+        #         # # 找到该标的所在的layout的下标
+        #         # remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+        #         # # 从此下标移除
+        #         # child_widget.bottom_update_widget_layout.takeAt(remove_index)
+        #         # # 插入到所在位置
+        #         # child_widget.bottom_update_widget_layout.insertWidget(find_target_symbol_index, remove_widget)
+
+        #         #==================
+        #         child_widget.bottom_update_widget_layout.addWidget(child_widget.stock_widget_dic[page_symbol].widget)
+
+        #================================================================================================
+
+        self.is_in_updating = False
 
 
     # 只初始化标的代码,名称,及相关w1-6中的各个容器
     def init_window_stork_name(self):
+
+        # 添加一个临时下标，用作于初始化分页显示
+        # self.page_show_count
+        temp_stock_index = 0
+
         #初始化标的代码
         for item in self.symbol_arr:
             #初始化标的代码与名称刷新容器内容
@@ -1004,14 +1162,25 @@ class TestClientUI(QMainWindow):
 
             # 分页功能中，初始化时，这里也不用添加到下方刷新容器中
             # 下面的label应该可以添加进每个标的的对用的layout中，但是下方刷新layout就不要添加此标的qwidget，试试看
-            # self.w1.bottom_update_widget_layout.addWidget(temp_qwidget)
+            # 初始化分页，按照服务器传送过来的顺序，暂时当作分页顺序就可以了
+            # 一开始从初始化就开始分页，而不是把所有标的都显示在UI上，不知道会不会快点，需要多尝试一下
+            # 在实时排序中，现在正在尝试隐藏-显示，所以都需要加进layout，而不是移除，暂时注释掉，不行再用移除的方法来尝试
+            # if temp_stock_index < self.page_show_count:
+            #     self.w1.bottom_update_widget_layout.addWidget(temp_qwidget)
+            self.w1.bottom_update_widget_layout.addWidget(temp_qwidget)
+            # 重新判断，大于页面显示数量，就做隐藏
+            # 由于排列是从0开始的，所以要-1
+            # if temp_stock_index > self.page_show_count - 1:
+            #     temp_qwidget.hide()
 
             # 分页功能，这里就不能带parent了，-----, temp_qwidget
+            # 分页功能，先前开头做的一点可能做错了，现在分页逻辑变了
+            # 尝试还原下，再重新做下试试
             stock = QLabel(f'{item}')  
             stock.setMinimumWidth(self.MAX_H_SIZE)
             stock.setMinimumHeight(self.MAX_V_SIZE)  
             # 初始化时，也不需要添加到layout中
-            # temp_qwidget_layout.addWidget(stock)
+            temp_qwidget_layout.addWidget(stock)
 
             # 这里需要在w1里创建一个dic，来存储stock和name的label,--dic<stock_id,dic<stock_label:Label, name_label:Lbael>>
             # 这个可能暂时用不上，也可以先保留
@@ -1020,11 +1189,17 @@ class TestClientUI(QMainWindow):
             self.w1.stock_widget_dic[item] = LabelOrderInfo(item, temp_qwidget, temp_qwidget_layout)
             # self.w1.stock_widget_dic[item].widget.setObjectName(item)
 
-            self.init_update_area_widget(item, self.w2)
-            self.init_update_area_widget(item, self.w3)
-            self.init_update_area_widget(item, self.w4)
-            self.init_update_area_widget(item, self.w5)
-            self.init_update_area_widget(item, self.w6)
+            self.init_update_area_widget(item, self.w2, temp_stock_index)
+            self.init_update_area_widget(item, self.w3, temp_stock_index)
+            self.init_update_area_widget(item, self.w4, temp_stock_index)
+            self.init_update_area_widget(item, self.w5, temp_stock_index)
+            self.init_update_area_widget(item, self.w6, temp_stock_index)
+
+            if temp_stock_index > self.page_show_count - 1:
+                for child_widget in self.child_widget_arr:
+                    # 找到该标的widget
+                    hide_widget = child_widget.stock_widget_dic[item].widget
+                    hide_widget.hide()
 
             temp_list = []
             self.agility_data_dic[item] = temp_list
@@ -1038,7 +1213,11 @@ class TestClientUI(QMainWindow):
             self.stock_order_one_time[item] = OderStockState(item, "", False)
             # 初始化所有标的所有数据dic
             self.all_stock_all_time_info[item] = AllStockAllTimeInfo(item)
-            self.init_all_stock_info(item)
+            # 先初始化一遍该标的当前位置
+            self.all_stock_all_time_info[item].time_order_index = temp_stock_index
+            self.init_stock_info(item)
+            temp_stock_index += 1
+            
 
             # 单独为w4添加刷新label
             self.all_stock_all_time_info[item].refresh_agility_label = self.create_label_with_percent("0", "0", self.w4.stock_widget_dic[item].widget)
@@ -1067,15 +1246,16 @@ class TestClientUI(QMainWindow):
         #初始化名称
         for key, valume in self.w1.stock_widget_dic.items():
             # 分页功能，这里就不能带parent了，-----, temp_qwidget
-            name = QLabel(f'{self.name_dic[key]}')  
+            name = QLabel(f'{self.name_dic[key]}', temp_qwidget)  
             name.setMinimumWidth(self.MAX_H_SIZE)
             name.setMinimumHeight(self.MAX_V_SIZE)  
-            # valume.layout.addWidget(name)
-            self.w1.stock_name_label_dic[key]["name_label"] = name
+            valume.layout.addWidget(name)
 
-            # 测试用
-            valume.layout.addWidget(self.w1.stock_name_label_dic[key]["stock_label"])
-            valume.layout.addWidget(self.w1.stock_name_label_dic[key]["name_label"])
+            # self.w1.stock_name_label_dic[key]["name_label"] = name
+
+            # # 测试用
+            # valume.layout.addWidget(self.w1.stock_name_label_dic[key]["stock_label"])
+            # valume.layout.addWidget(self.w1.stock_name_label_dic[key]["name_label"])
 
 
         #初始化完成后，向服务器发送已完成消息
@@ -1215,13 +1395,19 @@ class TestClientUI(QMainWindow):
                 main_window.has_today_history_update_single.emit(main_window.is_has_today_history_data)
 
     #初始化各个子容器里的各个widget,预装填,方便后续调用
-    def init_update_area_widget(self, item, qwidget):
+    def init_update_area_widget(self, item, qwidget, temp_stock_index):
         temp_qwidget = QWidget()
         temp_qwidget_layout = QHBoxLayout(temp_qwidget)
         temp_qwidget.setFixedHeight(self.MAX_V_SIZE)
         qwidget.stock_widget_dic[item] = LabelOrderInfo(item, temp_qwidget, temp_qwidget_layout)
         # 由于分页功能，在初始化时，这里暂时不添加进layout
+        # 这里需要跟着上面初始化动，初始化怎么改，这里就怎么改
+        # if temp_stock_index < self.page_show_count:
+        #     qwidget.bottom_update_widget_layout.addWidget(temp_qwidget)
         # qwidget.bottom_update_widget_layout.addWidget(temp_qwidget)
+        if temp_stock_index > self.page_show_count - 1:
+                temp_qwidget.hide()
+
         qwidget.label_with_time_dic[item] = []
         qwidget.stock_time_labelinfo_dic[item] = {}
 
@@ -1416,7 +1602,8 @@ class TestClientUI(QMainWindow):
     # 创建label
     def create_label_with_percent(self, eob, percent, parent_widget):
         # 分页功能中，这里应该就不能带parent_widget了，带了话就会显示在UI上----, parent_widget
-        data_label = QLabel(f'{eob}\n{percent}%')  
+        # 分页中，现在应该可以带上parent，不显示的方法变了
+        data_label = QLabel(f'{eob}\n{percent}%', parent_widget)  
         data_label.setMinimumHeight(self.MAX_V_SIZE)  
         data_label.setMinimumWidth(self.MAX_H_SIZE)
 
@@ -1862,6 +2049,66 @@ class TestClientUI(QMainWindow):
 
         main_window.temp_symbol_arr.clear()
     
+    # 根据每只标的来消息的顺序排序
+    def time_order_label(self, symbol, eob):
+
+        if symbol in self.top_stock_arr:
+            return
+
+        if self.all_stock_all_time_info[symbol].time_order_agility_time != eob:
+            self.all_stock_all_time_info[symbol].time_order_agility_time = eob
+
+            # 判断当前时间，是第一次进入此时间段，则重置排序下标
+            if self.system_monitor_attribute.order_time != eob:
+                self.system_monitor_attribute.order_time = eob
+
+                # 这里需要添加一个判断，是否有处于置顶中的标的
+                temp_begin_index = len(self.top_stock_arr)
+
+                self.system_monitor_attribute.order_index_by_time = 0 + temp_begin_index
+
+            temp_order_index = self.all_stock_all_time_info[symbol].time_order_index = self.system_monitor_attribute.order_index_by_time
+
+            # ===================================================================
+            # 遍历置顶集合中的标的，与他们原本位置做对比
+            # 如果此标的的排序下标小于置顶集合中标的的原本位置下标，那么该集合中的标的的原本位置则+1
+            # 找出该标的当前所在位置
+            # 分页功能，这里稍微有点复杂，脑袋有点晕了，先把关于置顶的这里注释掉
+            # find_widget = self.child_widget_arr[0].stock_widget_dic[symbol].widget
+            # find_current_index = self.child_widget_arr[0].bottom_update_widget_layout.indexOf(find_widget)
+            # # 添加一个临时的判断remove集合中，是否已经+1过的标的，如果再此集合中，就不再+1
+            # temp_had_increased_stock = []
+
+            # for top_symbol in self.top_stock_arr:
+            #     if temp_order_index <= self.all_stock_all_time_info[top_symbol].time_order_last_index:
+            #         # 判断如果该标的当前位置就已经大于置顶标的的原始位置就不+1了
+            #         if find_current_index > self.all_stock_all_time_info[top_symbol].time_order_last_index:
+            #             self.all_stock_all_time_info[top_symbol].time_order_last_index += 1
+
+            #     # 还需要判断，在置顶中的每只标的里的remove集合中的标的原本位置是否需要+1
+            #     for remove_symbol in self.all_stock_all_time_info[top_symbol].remove_before_self_in_top:
+            #         temp_remove_symbol_last_index = self.all_stock_all_time_info[remove_symbol].time_order_last_index
+            #         if find_current_index > temp_remove_symbol_last_index and remove_symbol not in temp_had_increased_stock:
+            #             self.all_stock_all_time_info[remove_symbol].time_order_last_index += 1
+            #             temp_had_increased_stock.append(remove_symbol)
+            # ===================================================================
+
+            # 由于分页功能，这里添加一个分页判断
+            # 继续往后做的时候，需要注意，当前页面是处于第几页
+            # 这里不做移除，用隐藏(widget.hide())，显示(widget.show())试试
+            # 如果这里做隐藏-显示，前面在初始化的时候就需要全部添加进layout，不然后面就会有问题，可以先试试看
+            for child_widget in self.child_widget_arr:
+                # 找到该标的widget
+                remove_widget = child_widget.stock_widget_dic[symbol].widget
+                # 找到该标的所在的layout的下标
+                remove_index = child_widget.bottom_update_widget_layout.indexOf(remove_widget)
+                # 从此下标移除
+                child_widget.bottom_update_widget_layout.takeAt(remove_index)
+                # 插入到所在位置
+                child_widget.bottom_update_widget_layout.insertWidget(temp_order_index, remove_widget)
+
+            self.system_monitor_attribute.order_index_by_time += 1
+
 
     # 排序
     def order_label(self, symbol, eob):
@@ -1994,7 +2241,8 @@ class TestClientUI(QMainWindow):
         self.all_stock_all_time_info[symbol].all_agility_percent[eob] = percent
         # 将灵活时间段的值存进排序中,这里应该不需要了，因为在排序中重新赋了一次值！
         # self.order_widget_dic[symbol] = percent
-        self.order_label(symbol, eob)
+        # self.order_label(symbol, eob)
+        self.time_order_label(symbol, eob)
 
         # 判断是否进入下一个时间段，如果是需要在w5中添加label   last_agility_refresh_eob
         if self.all_stock_all_time_info[symbol].last_agility_refresh_eob != eob:
@@ -2032,6 +2280,27 @@ class TestClientUI(QMainWindow):
         else:
             self.w5.stock_time_labelinfo_dic[symbol][eob].percent = percent
             self.w5.stock_time_labelinfo_dic[symbol][eob].label.setText(f'{eob}\n{percent}%')
+
+
+    # 显示当前时段，数据总量对比窗口
+    def show_period_amount_window_single(self):
+        symbol = main_window.system_monitor_attribute.show_period_amount_stock_arr[0]
+
+        temp_h_pa = self.all_stock_all_time_info[symbol].history_period_amount
+        temp_t_pa = self.all_stock_all_time_info[symbol].today_period_amount
+
+        if int(temp_h_pa) == 0:
+            temp_h_pa = 1
+
+        perid_amount_percent = round(float((temp_t_pa - temp_h_pa) / temp_h_pa) * 100, 2)
+
+        print(f"{symbol}|{temp_h_pa}|{temp_t_pa}|{perid_amount_percent}")
+
+        self.all_stock_all_time_info[symbol].period_amount_child_window = PeriodAmountChildWindow(symbol, self.name_dic[symbol], perid_amount_percent)
+        self.all_stock_all_time_info[symbol].period_amount_child_window.show()
+
+        main_window.system_monitor_attribute.show_period_amount_stock_arr.clear()
+
 
 
     # 新版，更新label
@@ -2274,6 +2543,27 @@ class ScrollableLabels(QWidget):
         self.timer.timeout.connect(self.flicker_background)  
         self.timer.start(500)  # 每500毫秒切换一次颜色  
 
+class PeriodAmountChildWindow(QWidget):
+    def __init__(self, symbol_id, symbol_name, percnet_period_amount):  
+        super().__init__()  
+        self.symbol_id = symbol_id
+        self.symbol_name = symbol_name
+        self.percnet_period_amount = percnet_period_amount
+
+        self.initUI()  
+
+
+    def initUI(self): 
+        self.setWindowTitle(f"{self.symbol_id} {self.symbol_name}")  
+        self.setGeometry(100, 100, 400, 80)
+
+        temp_h_pa = main_window.all_stock_all_time_info[self.symbol_id].history_period_amount
+        temp_t_pa = main_window.all_stock_all_time_info[self.symbol_id].today_period_amount
+
+        data_label = QLabel(f'昨:{temp_h_pa}\n今:{temp_t_pa}\n{self.percnet_period_amount}%', self)  
+        data_label.setMinimumWidth(100)
+        data_label.setMinimumHeight(70)
+
 class InitChildQwidGet(QWidget):
     def __init__(self):  
         super().__init__()  
@@ -2409,6 +2699,49 @@ class ReciveQThread(QThread):
                 elif operation_id == OP_ID_S2C_PERCENT_TODAY_DATA_SEND:
                     self.init_receive_halfway_agility_data_107()
 
+                #服务器返回，客户端所发送的标的数据总量对比请求
+                elif operation_id == OP_ID_S2C_PERIOD_AMOUNT_SEND:
+                    self.receive_period_amount_108()
+
+    # 接收服务器返回的数据占总量对比--108
+    def receive_period_amount_108(self):
+        #2-4 int32
+        symbol_letter_bytes = self.client_socket.recv(4)
+        symbol_letter_str = int.from_bytes(symbol_letter_bytes, byteorder='big')
+        symbol_letter = self.re_translate_letter_to_int(str(symbol_letter_str))
+        # print(f"symbol_letter:{symbol_letter}")
+
+        #3-4 int32
+        symbol_num_bytes = self.client_socket.recv(4)
+        symbol_num = str(int.from_bytes(symbol_num_bytes, byteorder='big'))
+        #___这里需要补全标的代码前面的0
+        if len(symbol_num) < 6:
+            need_complement = 6 - len(symbol_num)
+            for i in range(need_complement):
+                i += 1
+                symbol_num = '0' + symbol_num
+        # print(f"symbol_num:{symbol_num}")
+
+        #4-4 int32
+        history_period_amount_bytes = self.client_socket.recv(32)
+        history_period_amount = str(int.from_bytes(history_period_amount_bytes, byteorder='big'))
+
+        #5-4 int32
+        today_period_amount_bytes = self.client_socket.recv(32)
+        today_period_amount = str(int.from_bytes(today_period_amount_bytes, byteorder='big'))
+
+        symbol = symbol_letter + '.' + symbol_num
+
+        main_window.all_stock_all_time_info[symbol].history_period_amount = int(history_period_amount)
+        main_window.all_stock_all_time_info[symbol].today_period_amount = int(today_period_amount)
+
+        main_window.system_monitor_attribute.show_period_amount_stock_arr.append(symbol)
+
+        main_window.is_show_period_amount_bool = True
+        main_window.has_show_period_amount_single.emit(main_window.is_show_period_amount_bool)
+        main_window.is_show_period_amount_bool = False
+
+        # print(f"{symbol}|{history_period_amount}|{today_period_amount}")
 
     # 中途或者关盘后开启，接收初始化数据, OP_ID_S2C_PERCENT_TODAY_DATA_SEND--107
     def init_receive_halfway_agility_data_107(self):
@@ -2458,12 +2791,29 @@ class ReciveQThread(QThread):
 
                 # print(f"{symbol}:{percent}:{eob_time}")
 
-                main_window.temp_wait_for_update_dic["w4"].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
+                # 中途或者盘后开启，排序会比较混乱，这里可以改一下，方便查看
+                if eob_time not in main_window.system_monitor_attribute.hafway_sort_dic.keys():
+                    temp_arr = []
+                    main_window.system_monitor_attribute.hafway_sort_dic[eob_time] = temp_arr
+
+                # 把中途或者盘后开启的数据，先通过时间顺序，分别整理到各个时间段的集合中
+                main_window.system_monitor_attribute.hafway_sort_dic[eob_time].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
+                # main_window.temp_wait_for_update_dic["w4"].append({'symbol':symbol, 'percent':percent, 'eob_time':eob_time})
 
             had_recive_count += history_recive_count
             if had_recive_count == history_data_count:
                 break
 
+        # 由于用时间当key值来的顺序也不一样，所有要先根据key值排次序    OrderedDict() 
+        sorted_time_dict = sorted(main_window.system_monitor_attribute.hafway_sort_dic.items(), key=lambda item: datetime.strptime(item[0], '%H:%M:%S'))
+        # 遍历中途或盘后开启的dic，把里面的数据根据时间加入到待刷新的集合中
+        # main_window.system_monitor_attribute.hafway_sort_dic.items()
+        for agility_time_key, eob_time_arr in sorted_time_dict:
+            for dic_data_info in eob_time_arr:
+                temo_data_info = dic_data_info
+                main_window.temp_wait_for_update_dic["w4"].append(temo_data_info)
+        main_window.system_monitor_attribute.hafway_sort_dic.clear()
+        sorted_time_dict.clear()
 
         # 由于添加分页功能，这里可能需要新添加一个单独的中途开启UI刷新功能
         # 尝试只创建label，但不添加到layout中，试试看
@@ -2481,6 +2831,7 @@ class ReciveQThread(QThread):
         main_window.is_in_updating = True
         main_window.is_init_halfway_info_single = True
         main_window.has_init_halfway_info_single.emit(main_window.is_init_halfway_info_single)
+        main_window.is_init_halfway_info_single = False
 
         # 当数据来时，UI还在更新，则添加先添加到等待集合里
         # 由于分页功能，这里暂时注释掉

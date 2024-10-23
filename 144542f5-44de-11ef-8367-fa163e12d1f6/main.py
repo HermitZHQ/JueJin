@@ -24,7 +24,8 @@ from openpyxl.styles import Alignment
 from openpyxl.styles import Font
 
 global_i = 0
-str_strategy = 'VDebug' # V--VDebug
+str_strategy = 'VDebug' # V--VDebug # 这个标的代码列表文本现在更改为固定每天全标的列表文本，每天选出的监控文本用下面的selected_ids_path
+selected_ids_path = 'c:\\TradeLogs\\' + 'VDebug-Selected' + '.txt'    # V--VDebug # 监控每天选出的标的列表文本
 str_load_history = 'AllHistoryInfo'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path_a1 = 'c:\\TradeLogs\\IDs-' + str_strategy + '-A1.txt'
@@ -48,11 +49,14 @@ OP_ID_S2C_HISTORY_TODAY_DATA_SEND = 104 # 客户端中途开启，初始化时�
 OP_ID_S2C_MIN_REAL_TIME_DATA_SEND = 105 # 新版,当前分钟实时数据
 OP_ID_S2C_AGILITY_REAL_TIME_DATA_SEND = 106 # 新版，灵活分钟实时数据
 OP_ID_S2C_PERCENT_TODAY_DATA_SEND = 107 # 新版，中途或者关盘后开启，当日次时段之前的对比数据
+OP_ID_S2C_PERIOD_AMOUNT_SEND = 108 # 当前时段昨日与今日数据总量发送
+
 
 OP_ID_C2S_QUICK_BUY = 120 # 买
 OP_ID_C2S_QUICK_SELL = 121 # 卖
 OP_ID_C2S_SELECT_STOCK_SHOW = 130 # 处于搜索中标的，且没有达标的标的，依然显示数据(原先是没有达标，服务器不会发送数据)
 OP_ID_C2S_TOP_STOCK_SHOW = 131 # 处于置顶中标的，且没有达标的标的，依然显示数据(原先是没有达标，服务器不会发送数据)
+OP_ID_C2S_PERIOD_AMONT_SHOW = 132 # 弹窗，显示该只标的当前时段的今日与昨天历史总量对比
 
 #0v0
 #=-=
@@ -70,15 +74,19 @@ class DataLimitToSend:
 class StorkInfo:
     def __init__(self):
         self.symbol = ""
+        self.sec_name = "" # 标的中文名称
+        self.current_eob = "" # 该标的当前时间段
         self.today_data = {} # 今天每分钟数据 key<min>, value<min_today_amount>
         self.history_data = {} # 昨日历史每分钟数据 key<min>, value<min_history_amount>
         self.agility_data = {} # 灵活时间数据，其中包括历史数据换算成的灵活时间数据和今日的灵活时间数据，key<agility_min>, value<AgilityDataInfo()>
         self.history_amount = 0
         self.current_amount = 0
+        self.today_period_amount = 0.0 # 今日当前时段总量
+        self.history_period_amount = 0.0 # 历史当前时段总量
         self.pre_close = 0.0 # 昨日关盘价
         self.current_price = 0.0 # 实时价格
-        self.sec_name = "" # 标的中文名称
         self.record_agility_data = [] # 记录灵活时间达标的数据, []{agility_time, percent}
+
 
 class AgilityDataInfo:
     def __init__(self):
@@ -161,11 +169,12 @@ def init(context):
     context.estimate_index = 0 # 灵活时间段下标，用于判断当前时间属于哪一段灵活时间，可用于estimate_dic中的key值
     context.symbol_str = ''
     context.delelte_ready_for_send = None
+    context.connect_single = False # 客户端连接阻塞信号
     context.datetime_noon_time_s = datetime.strptime('11:30:00', "%H:%M:%S").time()
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
     context.datetime_morning_time_s = datetime.strptime('09:30:00', "%H:%M:%S").time()
-    context.datetime_output_excel_time = datetime.strptime('10:30:00', "%H:%M:%S").time()
+    context.datetime_output_excel_time = datetime.strptime('15:30:00', "%H:%M:%S").time()
     context.datetime_current_price_time = datetime.strptime('14:15:00', "%H:%M:%S").time()
 
     context.subscription_stock_arr = []
@@ -178,6 +187,8 @@ def init(context):
     context.refresh_select_stock_arr = [] # 发送在此集合中的标的信息，如果没达标则发送，达标就不管了
     context.top_stock_arr = [] # 置顶标的集合
     context.halfway_agility_data_for_send_arr = [] # 中途开启时或关盘后开启，用于发送此dic中的灵活时间达标数据, arr<{"symbol", "percent", "eob"}>
+    context.period_amount_stock_arr = [] # 总量对比集合(此集合只会出现一只，处理完后清空此集合)
+    context.selected_ids_arr = [] # 每天所需要监控的标的集合
 
     context.symbol_arr = {}
     context.his_symbol_data_arr = set()
@@ -254,7 +265,18 @@ def init(context):
     # init_client_one_time(context)
 
     # 测试新版-服务器运算
-    # init_client_stork(context)
+    init_client_stork(context)
+    # 由于现在政策的变化，9:15开盘，将直接就可以开始买卖
+    # 现在将需要提前启动，并且将客户端初始化完成，直接使用下面这个函数，这样的话以后就只能1个服务器对应1个客户端
+    # 做一个while循环，阻塞在这里试试，阻塞只作用一次，所以目前只能1server-1clinet
+    # 现在关盘后应该也可以直接使用这里，不再需要在on_tick里等待连接
+    # 可能误解了新政策，这里先暂时注释掉
+    # temp_is_release = False
+    # while temp_is_release == False:
+    #     if context.connect_single:
+    #         init_client_method(context)
+    #         temp_is_release = True
+
     
     # 测试获得当日历史数据
     # load_ids(context)
@@ -269,9 +291,9 @@ def simulation_on_bar(context):
 
     test_count_index = 0
 
-    test_time_d = '2024-08-30 '
-    test_time_h = '10'
-    test_time_m = '00'
+    test_time_d = '2024-10-07 '
+    test_time_h = '09'
+    test_time_m = '15'
     test_time_s = '00.00013+08:00'
 
     test_time_time = test_time_d + test_time_h + ':' + test_time_m + ':' + test_time_s
@@ -352,7 +374,10 @@ def simulation_on_bar(context):
             #time.sleep(0.01)
 
 def subscribe_method(context):
+    # 读取固定的所有标的
     load_ids(context)
+    # 读取每天所需要监控的标的
+    load_selected_ids(context)
 
     temp_ids_str = ''
     temp_index = 0
@@ -848,7 +873,7 @@ def init_client_stork(context):
 
         # test_get_data(context)
 
-        #这个一定要放在subscribe_method(context),不然获取不了需要订阅的标的
+        #这个一定要放在subscribe_method(context)后面,不然获取不了需要订阅的标的
         load_history_from_file(context)
 
         context.is_subscribe = True
@@ -872,7 +897,9 @@ def init_client_stork(context):
                         client_socket = val.client_socket
 
                         # 读取当日历史数据，用于中途开启
-                        get_history_data_in_today(context)
+                        temp_is_get_today_data = reach_time(context, datetime.strptime('09:25:00', "%H:%M:%S").time())
+                        if temp_is_get_today_data == True:
+                            get_history_data_in_today(context)
 
                         now_data = context.now
                         print(f"{now_data}")
@@ -883,21 +910,41 @@ def init_client_stork(context):
                         #1-4 OP_ID_S2C_STOCK_NAME_SEND
                         ready_send_name_bytes = OP_ID_S2C_STOCK_NAME_SEND.to_bytes(4, byteorder="big")
                         #2-4 int32 标的名称总数量
-                        stock_name_count = len(context.temp_matching_dic)
-                        ready_send_name_bytes += stock_name_count.to_bytes(4, byteorder="big")
+                        # 这里更改为选中表单里的标的数量    context.temp_matching_dic - context.selected_ids_arr
 
+                        stock_name_count = len(context.selected_ids_arr)
+                        ready_send_name_bytes += stock_name_count.to_bytes(4, byteorder="big")
                         client_socket.sendall(ready_send_name_bytes)
 
-                        for key, valume in context.temp_matching_dic.items():
-                            ready_send_name_str = key + "+" + valume
+                        # for key, valume in context.temp_matching_dic.items():
+
+                        #     # 由于现在表单分为2份，一份固定表单，一份所选表单
+                        #     # 这里需要添加判断，只发送在所选表单里的标的
+                        #     # 下面的以及中途开启函数里面的都需要添加判断
+                        #     if key in context.selected_ids_arr:
+                        #         ready_send_name_str = key + "+" + valume
+                        #         send_data = ready_send_name_str.encode('utf-8')
+                        #         send_length = len(send_data).to_bytes(4, byteorder='big')
+                        #         client_socket.sendall(send_length)
+                        #         print(f"{ready_send_name_str}")
+                        #         client_socket.sendall(send_data)
+
+                        #     #这里传输标的代码及名字时，等待一下，看看是否还会报错
+                        #     #自从添加了if判断，这里时间太快会报错，暂时还不清楚是什么原因 2024-10-20
+                        #     #重新尝试不要if判断
+                        #     time.sleep(0.01)
+
+                        for key in context.selected_ids_arr:
+
+                            ready_send_name_str = key + "+" + context.temp_matching_dic[key]
                             send_data = ready_send_name_str.encode('utf-8')
                             send_length = len(send_data).to_bytes(4, byteorder='big')
                             client_socket.sendall(send_length)
                             print(f"{ready_send_name_str}")
                             client_socket.sendall(send_data)
 
-                            #这里传输标的代码及名字时，等待一下，看看是否还会报错
-                            time.sleep(0.002)
+                            time.sleep(0.01)
+
                         #==========================================
                         # 这里添加中途开启功能 OP_ID_S2C_PERCENT_TODAY_DATA_SEND
 
@@ -907,7 +954,8 @@ def init_client_stork(context):
                                 temp_agility_percent = calculate_percent_mathod(s_v.history_amount, s_v.current_amount)
                                 if int(temp_agility_percent) >= context.data_limit_to_send.agility_limit:
                                     # 将中途开启并且达标的数据存入准备发送的arr中
-                                    context.halfway_agility_data_for_send_arr.append({"symbol":s_v.symbol, "percent":temp_agility_percent, "eob":s_v.agility_time})
+                                    if s_v.symbol in context.selected_ids_arr:
+                                        context.halfway_agility_data_for_send_arr.append({"symbol":s_v.symbol, "percent":temp_agility_percent, "eob":s_v.agility_time})
 
                                 if int(temp_agility_percent) >= context.data_limit_to_send.record_agility_limit:
                                     # 将达标的数据添加进本标的信息中
@@ -1043,11 +1091,9 @@ def delete_socket(context):
 #__tick__对连接进来的客户端进行初始化
 def init_client_method(context):
     if context.init_client_socket_dic:
-
         context.iniclient_socket_lock.acquire()
 
         for key, valume in context.init_client_socket_dic.items():
-
             if valume.is_init == False and valume.is_initing == False and valume.check_mac_flag == True:
                 #旧版
                 # init_client_one_time(context)
@@ -1279,6 +1325,9 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
         cur_tick_time = "11:29:00"
     elif datetime_cur_tick_time >= context.datetime_afternoon_time_s:
         cur_tick_time = "14:59:00"
+    # 由于政策发生变化，现，没有集合进价了，9:15直接开盘买卖
+    # 先注释掉这里，模拟盘上试试
+    # 可能误解了新政策，这里先暂时注释掉
     elif datetime_cur_tick_time < context.datetime_morning_time_s:
         cur_tick_time = "09:25:00"
     else:
@@ -1298,6 +1347,14 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
             temp_min = '00'
 
         cur_tick_time = temp_hour + ":" + temp_min + ":" + "00"
+
+    # 判断该标的当前时间段(分钟时间段，不是灵活时间段)，便于统计历史数据中，当前时间段总量
+    if cur_tick_time != context.all_stock_info_dic[cur_tick_symbol].current_eob:
+        context.all_stock_info_dic[cur_tick_symbol].history_period_amount += context.all_his_data_with_min_dic[cur_tick_symbol][cur_tick_time]
+        context.all_stock_info_dic[cur_tick_symbol].current_eob = cur_tick_time
+    # 统计今天当前时间段总量
+    context.all_stock_info_dic[cur_tick_symbol].today_period_amount += cur_tick_amount
+    # print(f"{cur_tick_symbol}|{context.all_stock_info_dic[cur_tick_symbol].history_period_amount}|{context.all_stock_info_dic[cur_tick_symbol].today_period_amount}")
 
     # 保存当前分钟信息
     if cur_tick_symbol in context.all_cur_data_info_dic.keys():
@@ -1323,7 +1380,9 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
     # 当前分钟
     if int(min_percent) >= context.data_limit_to_send.min_limit:
         print(f"{cur_tick_symbol}::min:{cur_tick_time}|{min_percent}")
-        send_message_min(context, clinet_socket, cur_tick_symbol, min_percent, cur_tick_time)
+        # 添加判断，只发送选中表单里的标的
+        if cur_tick_symbol in context.selected_ids_arr:
+            send_message_min(context, clinet_socket, cur_tick_symbol, min_percent, cur_tick_time)
     # 当前灵活分钟或当前标的是处于搜索中的标的
     if int(agility_percent) >= context.data_limit_to_send.agility_limit or cur_tick_symbol in context.refresh_select_stock_arr or cur_tick_symbol in context.top_stock_arr:
         # 这里添加一个实时涨幅的判断，水上/水下(昨日收盘价与当前的实时价格对比)
@@ -1337,7 +1396,9 @@ def save_cur_data_to_dic(context, tick, clinet_socket):
 
         # 当此标的在水上(当前价格高于昨日关盘价)的时候，才发送消息
         if temp_is_increase == True:
-            send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
+            # 添加判断，只发送选中表单里的标的
+            if cur_tick_symbol in context.selected_ids_arr:
+                send_message_agility(context, clinet_socket, cur_tick_symbol, temp_agility_percent, context.estimate_dic[cur_tick_time])
 
         # 新增条件，上了1000才添加进集合中
         if int(agility_percent) >= context.data_limit_to_send.record_agility_limit:
@@ -1360,6 +1421,21 @@ def output_excel_method(context):
     if reach_time(context, context.datetime_output_excel_time) and context.is_output_excel == False:
         get_stock_newest_price(context)
         record_data_in_excel(context)
+
+# __tick__将指定的对比总量标的发送给客户端
+def show_period_amount_method(context, clinet_socket):
+    if len(context.period_amount_stock_arr) != 0:
+        period_symbol = context.period_amount_stock_arr[0]
+        temp_today_period_amount = context.all_stock_info_dic[period_symbol].today_period_amount
+        temp_history_period_amount = context.all_stock_info_dic[period_symbol].history_period_amount
+
+        print(f"{period_symbol}|{temp_today_period_amount}|{temp_history_period_amount}")
+
+        send_period_amount(context, clinet_socket, period_symbol, temp_history_period_amount, temp_today_period_amount)
+
+        context.period_amount_stock_arr.clear()
+
+
 
 def on_tick(context, tick):
 
@@ -1401,6 +1477,9 @@ def on_tick(context, tick):
 
                         # 存储实时数据, 对比，发送，都在这
                         save_cur_data_to_dic(context, tick, v)
+
+                        # 根据客户端请求，向客户端发送指定标的当前时刻，今日与昨日数据总量
+                        show_period_amount_method(context, v)
 
                     #当有客户端连接进来，但是还没初始化完成时，先将来的数据存入等待发送的队列里
                     else:
@@ -1656,6 +1735,7 @@ def load_history_from_file(context):
 
         # 在这补全09:15:00-09:30:00的数据，注意！09:25:00，09:26:00不需要补全
         # 或者！！直接从下载历史数据工具补全
+        # 这里已经从下载历史数据工具中补全
 
         # 这里需要初始化下，当日所有标的实时数据dic
         temp_dic = {}
@@ -1760,6 +1840,12 @@ def init_min_and_agility_dic(context):
         context.all_cur_data_info_dic[his_today_25_val['symbol']]['09:25:00'] =  his_today_25_val['last_amount']
         agility_time = find_agility_time(context, 'xx 09:25:00+8:00')
         context.all_agility_data_info_dic[his_today_25_val['symbol']][agility_time].current_amount = his_today_25_val['last_amount']# agility_time -- '09:25:00'
+
+        # 初始化今天总量，以及历史总量，需要加上25分钟的集合进价
+        # 这里应该不需要加上(注意，盘中启动不知道31分钟是否包含集合进价，盘后启动是包括的，有待观察!!!)
+        # context.all_stock_info_dic[his_today_25_val['symbol']].today_period_amount += his_today_25_val['last_amount']
+        # print(f"{his_today_25_val['symbol']}|25|{his_today_25_val['last_amount']}")
+
     #将没有数据的标的，赋予0.0值
     for notin_today_25_val in context.notin_25_today_stock_arr:
         context.all_cur_data_info_dic[notin_today_25_val]['09:25:00'] =  0.0
@@ -1776,7 +1862,17 @@ def init_min_and_agility_dic(context):
         agility_time = find_agility_time(context, str(his_today_val['eob']))
         context.all_agility_data_info_dic[his_today_val['symbol']][agility_time].current_amount += his_today_val['amount']
 
+        # 初始化今天总量，以及历史总量
+        context.all_stock_info_dic[his_today_val['symbol']].today_period_amount += his_today_val['amount']
+        context.all_stock_info_dic[his_today_val['symbol']].history_period_amount += context.all_his_data_with_min_dic[his_today_val['symbol']][temp_time]
+
         # print(f"{his_today_val['symbol']}|{str(his_today_val['eob'])}|{his_today_val['amount']}")
+    
+    # for item in context.subscription_stock_arr:
+    #     today_period_amount = context.all_stock_info_dic[item].today_period_amount
+    #     history_period_amount = context.all_stock_info_dic[item].history_period_amount
+        # print(f"{item}|{today_period_amount}|{history_period_amount}")
+
 
     # 正常时段分钟数+1
     # 取出当前second时间,添加一个判断，不然后面肯定会报错
@@ -2202,6 +2298,32 @@ def send_message_second_method(client_socket, context):
             context.cur_data_dic.clear()
             context.temp_clear_curdata_index = 0
 
+# 当前时段昨日历史数据总量，今日数据总量发送---108
+def send_period_amount(context, client_socket, s_symbol, history_period_amount, today_period_amount):
+    try:
+        #OP_ID_S2C_PERIOD_AMOUNT_SEND - 108
+        sned_data_bytes = translate_period_amount(context, s_symbol, history_period_amount, today_period_amount)
+
+        #4+4+4+4+4+4 = 24字节
+        client_socket.sendall(OP_ID_S2C_PERIOD_AMOUNT_SEND.to_bytes(4, byteorder='big') + sned_data_bytes)
+
+    except ConnectionResetError:
+         client_socket.close()
+         print("Client disconnected unexpectedly.")
+         print("In send method.")
+         
+         for key, valume in context.socket_dic.items():
+                    if client_socket == valume:
+                        context.delete_temp_adress_arr.append(key)
+                        context.client_init_complete_dic[client_socket] = False
+                        break
+
+    finally:
+        context.temp_clear_curdata_index += 1
+        if context.temp_clear_curdata_index == len(context.socket_dic):
+            context.cur_data_dic.clear()
+            context.temp_clear_curdata_index = 0
+
 # 新版发送线程，当前分钟实时数据发送---106
 def send_message_agility(context, client_socket, s_symbol, s_percent, s_eob):
     try:
@@ -2255,6 +2377,53 @@ def send_message_min(context, client_socket, s_symbol, s_percent, s_eob):
         if context.temp_clear_curdata_index == len(context.socket_dic):
             context.cur_data_dic.clear()
             context.temp_clear_curdata_index = 0
+
+# 昨日与今日数据总量转化(bytes):
+def translate_period_amount(context, symbol, history_period_amount, today_period_amount):
+    temp_symbol_letter = 0
+    temp_symbol_num = 0
+    temp_h_pa = 0
+    tmpe_t_pa = 0
+
+    # 发现数值过大，转化为byte时会失败
+    # 尝试分段转化，例如，200,000时， 将它拆分为 str(20) + str(0000)
+    # 这里前面再添加一个识别该分段接收还是直接一口气接收
+    # is_need_section = ""
+    # if len(str(history_period_amount)) > 5:
+    #     is_need_section = "2"
+    # else:
+    #     is_need_section = "1"
+    # if len(str(today_period_amount)) > 5:
+    #     is_need_section += "2"
+    # else:
+    #     is_need_section += "1"
+
+    #2-4 int32
+    temp_symbol_arr = symbol.split(".")
+    temp_symbol_letter = translate_letter_to_int(temp_symbol_arr[0])
+    symbol_letter_bytes = temp_symbol_letter.to_bytes(4, byteorder='big')
+
+    #3-4 int32
+    temp_symbol_num = int(temp_symbol_arr[1])
+    symbol_num_bytes = temp_symbol_num.to_bytes(4, byteorder='big')
+
+    #4-4 int32  int(history_period_amount) - numpy.int64
+    temp_h_pa = int(history_period_amount)
+    # h_pa_byte_length = (temp_h_pa.bit_length() + 7) // 8
+    # h_pa_byte_length_bytes = int(h_pa_byte_length).to_bytes(4, byteorder='big')
+
+    symbol_h_pa = temp_h_pa.to_bytes(32, byteorder='big') # 4 - h_pa_byte_length
+
+    #5-4 int32  int(today_period_amount) - numpy.int64
+    tmpe_t_pa = int(today_period_amount)
+    # t_pa_byte_length = (temp_h_pa.bit_length() + 7) // 8
+    # t_pa_byte_length_bytes = int(t_pa_byte_length).to_bytes(4, byteorder='big')
+
+    symbol_t_pa = tmpe_t_pa.to_bytes(32, byteorder='big') # 4 - t_pa_byte_length
+
+    #4+4+32+32 = 72字节
+    send_bytes = symbol_letter_bytes + symbol_num_bytes + symbol_h_pa + symbol_t_pa
+    return send_bytes
 
 # 转为data为bytes--标的id，百分比，时间
 def translate_data_calculate_percent(context, symbol, percent, eob):
@@ -2361,6 +2530,74 @@ def translate_send_data_to_bytes(context, symbol, amount, eob):
     
     return send_bytes
 
+# 读取每天所需要监控的标的代码
+def load_selected_ids(context):
+    file_obj = open(selected_ids_path, 'r') # ids_path_a1 - selected_ids_path
+    lines = file_obj.readlines()
+
+    buy_flag = True
+    for line in lines:
+        should_add = True
+        str_tmp = line.strip() # 去掉换行符
+        original_id = str_tmp
+
+        # 属于一个技巧性地读取，首先Buy在配置文件的上面，Sell在下面
+        # 所以上面都是true，当读取到--------Sell标志行的时候，转为False，这样下面的都是False
+        if (str_tmp.find('--------Sell') != -1):
+            buy_flag = False
+        first3 = str_tmp[:3]
+
+        if (first3 == '600'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '601'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '603'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '605'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '688'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '689'):
+            str_tmp = 'SHSE.' + str_tmp[:6]
+        elif (first3 == '000'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '001'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '002'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '003'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '300'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == '301'):
+            str_tmp = 'SZSE.' + str_tmp[:6]
+        elif (first3 == 'fsa'):
+            should_add = False
+            context.force_sell_all_flag = True
+        elif (first3 == 'mv:'):
+            should_add = False
+            mv = float(str_tmp[3:]) if (str_tmp[3:] != '') else 0.0
+            if -1 == mv: # 初始化的情况（应该只有每天第一次启动脚本的时候执行这里）
+                #context.calculate_total_market_value_flag = True
+                log(f"did not find valid market value, need re-calculate")
+            else:
+                log(f"find valid total market value:{mv}")
+        else:
+            should_add = False
+            print(f'读取IDs配置错误：{str_tmp}')
+
+        if buy_flag == False:
+            print(f"init total ids : {len(context.selected_ids_arr)}")
+            print(f"init selected ids down=========================")
+            break
+        else:
+            if should_add == True and context.is_subscribe == False:
+                if str_tmp not in context.selected_ids_arr:
+                    context.selected_ids_arr.append(str_tmp)
+                    
+
+
+# 此方法现在已改为，读取每天固定的，所有标的代码
 def load_ids(context):
     # 看股票代码就能分辨，上证股票是在上海交易所上市的股票，股票代码以600、601、603开头，科创板（在上海交易所上市）股票代码以688开头
     # 深市股票是在深市交易所上市的股票，股票代码以000、002、003开头，创业板（在深圳交易所上市）股票代码以300开头。
@@ -2657,11 +2894,11 @@ class MainServerTreadC(threading.Thread):
                 print(f"socket{client_socket}")
                 print(f"New connection from: {client_address}")
 
-                # #尝试开启线程，持续接受客户端消息
+                # 尝试开启线程，持续接受客户端消息
                 rfc_thread = ReciveClientThreadC(client_socket, self.context, client_address)
                 rfc_thread.start()
 
-                 # #尝试开启线程，持续向客户端发送消息
+                # 尝试开启线程，持续向客户端发送消息
                 # sct_thread = SendClientThreadC(client_socket)
                 # sct_thread.start()
 
@@ -2792,6 +3029,23 @@ class ReciveClientThreadC(threading.Thread):
             # 取消该标的置顶
             self.context.top_stock_arr.remove(str_symbol)
 
+    # 接收总量对比标的id
+    def socket_receive_period_amount_stock(self, context):
+        receive_symbol_bytes = self.client_socket.recv(4)
+        buy_id = int.from_bytes(receive_symbol_bytes, byteorder='big')
+        str_symbol = self.change_stock_int_to_string(buy_id)
+
+        print(f"str_symbol::{str_symbol}")
+
+        self.context.period_amount_stock_arr.append(str_symbol)
+
+        # show_period_amount_method()
+        # datetime_cur_tick_time = datetime.strptime(cur_tick_time, "%H:%M:%S").time()
+        # 由于关盘后，on_tick就没有消息了，所以只能用线程传回消息
+        temp_is_colse = reach_time(context, datetime.strptime('15:30:00', "%H:%M:%S").time())
+        if temp_is_colse == True:
+            show_period_amount_method(context, self.client_socket)
+            
 
     def run(self):
         #主动停止线程while not self._stop_event.is_set():
@@ -2821,6 +3075,8 @@ class ReciveClientThreadC(threading.Thread):
                         if mac_address_str in self.context.mac_address_arr:
                             self.context.init_client_socket_dic[self.client_address].check_mac_flag = True
                             self.context.socket_dic[self.client_address] = self.client_socket
+                            # 释放最上面的连接阻塞信号
+                            self.context.connect_single = True
                         else :
                             print(f"not in not in not in not in not in ")
                             self.client_socket.close()
@@ -2845,6 +3101,9 @@ class ReciveClientThreadC(threading.Thread):
                     #接收处于置顶中的标的id
                     elif self.context.operation_id_recive == OP_ID_C2S_TOP_STOCK_SHOW:
                         self.socket_receive_top_stock()
+                    #接收总量对比标的id
+                    elif self.context.operation_id_recive == OP_ID_C2S_PERIOD_AMONT_SHOW:
+                        self.socket_receive_period_amount_stock(self.context)
                     #未注册的MAC地址，直接关闭socket以及接收thread
                     else:
                         print(f"{self.client_socket}:this is no recognition MAC, close socket!!!")

@@ -34,13 +34,19 @@ statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 mac_address_path = 'c:\\TradeLogs\\' + 'macAddress' + '.txt'
 
+SECTION_HISTORY_STOCK_COUNT = 100
+HISTORY_DATA_SEND_COUNT = 50
+HISTORY_TODAY_DATA_SEND_COUNT = 50
+HALFWAY_AGILITY_DATA_SEND_COUNT = 50
+
+
 def TempOutputExcel():
     pass
 
 class DataLimitToSend:
     def __init__(self):
         self.min_limit = 20000 # 1分钟实时数据超过这个界限,就send
-        self.agility_limit = 800 # 灵活实时数据超过这个界限，就sned
+        self.agility_limit = 1000 # 灵活实时数据超过这个界限，就sned
 
 class StorkInfo:
     def __init__(self):
@@ -131,11 +137,13 @@ def init(context):
     context.LENGTH_FORMAT = 'I'
     context.chunk_size = 1024
     context.set_agility_time = 5 # 设置灵活分钟数，例如为5时，5分钟内的历史数据与实时5分钟内的数据
+    context.record_data_count_of_row = 7 # excel中，每行记录多少个数据
     context.operation_id_send = 0
     context.operation_id_recive = 0
     context.estimate_index = 0 # 灵活时间段下标，用于判断当前时间属于哪一段灵活时间，可用于estimate_dic中的key值
     context.symbol_str = ''
     context.delelte_ready_for_send = None
+    context.choice_date = "2024-09-04" # 选择日期，输出excel
     context.datetime_noon_time_s = datetime.strptime('11:30:00', "%H:%M:%S").time()
     context.datetime_noon_time_e = datetime.strptime('13:00:00', "%H:%M:%S").time() 
     context.datetime_afternoon_time_s = datetime.strptime('15:00:00', "%H:%M:%S").time()
@@ -152,6 +160,8 @@ def init(context):
     context.refresh_select_stock_arr = [] # 发送在此集合中的标的信息，如果没达标则发送，达标就不管了
     context.top_stock_arr = [] # 置顶标的集合
     context.halfway_agility_data_for_send_arr = [] # 中途开启时或关盘后开启，用于发送此dic中的灵活时间达标数据, arr<{"symbol", "percent", "eob"}>
+    context.current_day_data = []
+    context.yesterday_data = []
 
     context.symbol_arr = {}
     context.his_symbol_data_arr = set()
@@ -213,26 +223,86 @@ def init(context):
     subscribe_method(context)
     load_history_from_file(context)
     load_today_history_from_file(context)
+    get_stock_price(context)
+    comparison_record_data(context)
+    record_data_in_excel(context)
 
+def get_stock_price(context):
+    choice_date_s = context.choice_date
+    # choice_date_e = "2024-09-05"
+    # s_time = choice_date + " 09:15:00"
+    # e_time = choice_date + " 15:00:00"
 
-def get_todat_date():
-        # 获取当前日期
-        today = datetime.now().date()
+    choice_yesterday_s = get_previous_or_friday_date(choice_date_s)
+    choice_yesterday_s = str(choice_yesterday_s).split(" ")[0]
 
-        # 获取前一天的日期  - timedelta(days=1)
-        previous_day = today
+    temp_section_index = 0
+    temp_section_ids_str = ''
+    temp_his_today_data = []
+    temp_yes_today_data = []
 
-        # 获取前一天的星期几（0是星期一，6是星期天）
-        weekday = previous_day.weekday()
+    for item in context.subscription_stock_arr:
 
-        # 如果前一天是星期六（weekday == 5）或星期天（weekday == 6）
-        if weekday >= 5:
-            # 获取星期五的日期（如果是星期天，需要减去2天；如果是星期六，需要减去1天）
-            friday_date = previous_day - timedelta(days=weekday - 4)
-            return friday_date
+        if temp_section_index == 0:
+                temp_section_ids_str = item
         else:
-            # 前一天不是星期六或星期天，直接返回前一天的日期
-            return previous_day
+            temp_section_ids_str = temp_section_ids_str + ',' + item
+        temp_section_index += 1
+
+        #当达到批次的数量时，开始获得历史数据
+        if temp_section_index == SECTION_HISTORY_STOCK_COUNT:
+            temp_his_today_data = history(symbol=temp_section_ids_str, frequency='1d', start_time=choice_date_s,  end_time=choice_date_s, fields='symbol, close', adjust=ADJUST_PREV, df=False) 
+            temp_yes_today_data = history(symbol=temp_section_ids_str, frequency='1d', start_time=choice_yesterday_s,  end_time=choice_yesterday_s, fields='symbol, close', adjust=ADJUST_PREV, df=False) 
+
+            for temp_data in temp_his_today_data:
+                #这里应该要新创建一个变量
+                temp_temp_data = temp_data
+                context.current_day_data.append(temp_temp_data)
+
+            for temp_data in temp_yes_today_data:
+                #这里应该要新创建一个变量
+                temp_temp_data = temp_data
+                context.yesterday_data.append(temp_temp_data)
+
+            #重置temp_index以及temp_section_ids_str
+            temp_section_index = 0
+            temp_section_ids_str = ''
+
+            #重置,方便接受下一批次
+            temp_his_today_data.clear()
+            temp_yes_today_data.clear()
+
+    if temp_section_ids_str != '':
+        temp_his_today_data = history(symbol=temp_section_ids_str, frequency='1d', start_time=choice_date_s,  end_time=choice_date_s, fields='symbol, close', adjust=ADJUST_PREV, df=False) 
+        temp_yes_today_data = history(symbol=temp_section_ids_str, frequency='1d', start_time=choice_yesterday_s,  end_time=choice_yesterday_s, fields='symbol, close', adjust=ADJUST_PREV, df=False) 
+
+        for temp_data in temp_his_today_data:
+            #这里应该要新创建一个变量
+            temp_temp_data = temp_data
+            context.current_day_data.append(temp_temp_data)
+
+        for temp_data in temp_yes_today_data:
+                #这里应该要新创建一个变量
+                temp_temp_data = temp_data
+                context.yesterday_data.append(temp_temp_data)
+
+        #重置temp_index以及temp_section_ids_str
+        temp_section_index = 0
+        temp_section_ids_str = ''
+
+        #重置,方便接受下一批次
+        temp_his_today_data.clear()
+        temp_yes_today_data.clear()
+
+    print(f"{len(context.current_day_data)}")
+    print(f"{len(context.yesterday_data)}")
+    for item in context.current_day_data:
+        context.all_stock_info_dic[item["symbol"]].current_price = item["close"]
+        # print(f"{item["symbol"]}|{item["close"]}")
+    for item in context.yesterday_data:
+        context.all_stock_info_dic[item["symbol"]].pre_close = item["close"]
+        # print(f"{item["symbol"]}|{item["close"]}")
+
 
 #__tick__计算百分比
 def calculate_percent_mathod(history_data, current_data):
@@ -253,6 +323,8 @@ def comparison_record_data(context):
                 # 将达标的数据添加进本标的信息中
                 context.all_stock_info_dic[s_v.symbol].record_agility_data.append({"agility_time":s_v.agility_time, "percent":temp_agility_percent})
 
+            # print(f"s_v.symbol:{len(context.all_stock_info_dic[s_v.symbol].record_agility_data)}")
+
 
 def record_data_in_excel(context):
     wb = Workbook()  
@@ -264,10 +336,29 @@ def record_data_in_excel(context):
     data.append(first_row)
     data[0].append("代码")
     data[0].append("名称")
+    data[0].append("涨幅")
     last_record_count = 0
     
+    # 添加临时排序dic，根据涨幅来排序
+    temp_order_dic = {}
     for symbol_val in context.all_stock_info_dic.values():
-    
+        yesterday_price = context.all_stock_info_dic[symbol_val.symbol].pre_close
+        today_price = context.all_stock_info_dic[symbol_val.symbol].current_price
+
+        temp_increase_price = (float(today_price) - float(yesterday_price)) / float(yesterday_price)
+        increase_price = round(temp_increase_price * 100, 2)
+
+        temp_order_dic[symbol_val.symbol] = increase_price
+
+    sorted_dic = sorted(temp_order_dic.items(), key=lambda item: item[1], reverse=True)
+
+    # for symbol_k, symbol_v in sorted_dic:
+    #     print(f"{symbol_k}|{symbol_v}")
+
+    for symbol_k, symbol_v in sorted_dic:
+    # for symbol_val in context.all_stock_info_dic.values():
+        symbol_val = context.all_stock_info_dic[symbol_k]
+
         if len(symbol_val.record_agility_data) != 0:
 
             temp_data_frist_row = []
@@ -275,14 +366,65 @@ def record_data_in_excel(context):
 
             # print(f"{symbol_val.symbol}|{symbol_val.sec_name}|{len(symbol_val.record_agility_data)}")
 
-            temp_data_frist_row.append(symbol_val.symbol)
-            temp_data_frist_row.append(symbol_val.sec_name)
-                
-            for recor_data_info in symbol_val.record_agility_data:
-                temp_data_frist_row.append(recor_data_info["percent"])
+            symbol_id = symbol_val.symbol.split(".")[1] 
+            symbol_name = symbol_val.sec_name + "(" + str(len(symbol_val.record_agility_data)) + ")"
 
-            data.append(temp_data_frist_row)
+            temp_data_frist_row.append(symbol_id)
+            temp_data_frist_row.append(symbol_name)
 
+            yesterday_price = context.all_stock_info_dic[symbol_val.symbol].pre_close
+            today_price = context.all_stock_info_dic[symbol_val.symbol].current_price
+            temp_increase_price = (float(today_price) - float(yesterday_price)) / float(yesterday_price)
+            increase_price = round(temp_increase_price * 100, 2)
+            increase_price = str(increase_price) + "%"
+
+            temp_data_frist_row.append(increase_price)
+            
+            # 添加换行，如果该只标的数量大于7，就需要换行，每行数据最多7个
+            # row_count直接+1，方便下面for循环使用
+            row_count = len(symbol_val.record_agility_data) // context.record_data_count_of_row + 1
+            # 刚好该标的达标数为7时，需要-1
+            if len(symbol_val.record_agility_data) % context.record_data_count_of_row == 0: # = | %
+                row_count -= 1
+            # 这个集合用来装行数
+            temp_row_arr = []
+            temp_row_arr.append(temp_data_frist_row)
+            # 创建行数集合
+            for i in range(row_count - 1):
+                # 0行就不需要添加了，上面就添加好了
+                t_r_arr = []
+                # 添加前面的3个空格
+                for n in range(3):
+                    t_r_arr.append(" ")
+                temp_row_arr.append(t_r_arr)
+            # 先判断数据行数是否为0
+            for i in range(row_count):
+                run_range = 0
+                residue_run_range = len(symbol_val.record_agility_data) - i * context.record_data_count_of_row
+                # 判断是否小于7，不然会超出record_agility_data下标
+                if len(symbol_val.record_agility_data) <= context.record_data_count_of_row:
+                    run_range = len(symbol_val.record_agility_data)
+                else:
+                    run_range = context.record_data_count_of_row
+                    if residue_run_range <= context.record_data_count_of_row:
+                        run_range = residue_run_range
+
+                for n in range(run_range):
+                    temp_index = i * context.record_data_count_of_row + n
+
+                    if temp_index + 1 > len(symbol_val.record_agility_data):
+                        temp_index = len(symbol_val.record_agility_data) - 1
+
+                    temp_row_arr[i].append(symbol_val.record_agility_data[temp_index]["percent"])
+
+            for t_arr in temp_row_arr:
+                data.append(t_arr)
+
+            # for recor_data_info in symbol_val.record_agility_data:
+            #     temp_data_frist_row.append(recor_data_info["percent"])
+            # data.append(temp_data_frist_row)
+
+            # 对excel第一行添加数量，根据标的中，数量最多的为准
             if last_record_count == 0:
                 last_record_count = len(symbol_val.record_agility_data)
                 for i in range(last_record_count):
@@ -300,15 +442,17 @@ def record_data_in_excel(context):
     for row in data:  
         ws.append(row)
 
-    file_path = 'E:\\DataForExcel\\RecordStockCount' + str(get_todat_date()) + '.xlsx'
+    file_path = 'E:\\DataForExcel\\RecordStockCount' + context.choice_date + '.xlsx'
     wb.save(file_path)
 
     context.is_output_excel = True
 
 
-def get_previous_or_friday_date():
+def get_previous_or_friday_date(current_date):
     # 获取当前日期
-    today = datetime.now().date()
+    # today = datetime.now().date()
+
+    today = datetime.strptime(current_date, '%Y-%m-%d')
 
     # 获取前一天的日期
     previous_day = today - timedelta(days=1)
@@ -436,10 +580,16 @@ def init_agilit_dictionary(context, symbol_id):
     #     for c_key, c_val in p_value.items():
     #         print(f"{c_key}|{c_val.agility_time}|{c_val.current_amount}|{c_val.history_amount}")
 
+    # for key, value in context.all_agility_data_info_dic.items():
+    #     for kk, vv in value.items():
+    #         print(f"history amount:{kk}|{vv.history_amount}")
+
 
 #从文件中获取历史数据，其中包括了集合进价
 def load_history_from_file(context):
-    yesterday_date = get_previous_or_friday_date()
+    yesterday_date = get_previous_or_friday_date(context.choice_date)
+    yesterday_date = str(yesterday_date).split(" ")[0]
+    print(f"{yesterday_date}")
     load_history_path = 'e:\\HistoryFiles\\' + str_load_history + " " + str(yesterday_date) + '.npy' #加上日期，方便后面查找调用
 
     context.his_data = np.load(load_history_path, allow_pickle=True)
@@ -504,7 +654,8 @@ def load_history_from_file(context):
 
 
 def load_today_history_from_file(context):
-    yesterday_date = get_previous_or_friday_date()
+    yesterday_date = context.choice_date
+    print(f"{yesterday_date}")
     load_history_path = 'e:\\HistoryFiles\\' + str_load_history + " " + str(yesterday_date) + '.npy' #加上日期，方便后面查找调用
 
     context.his_data_for_today = np.load(load_history_path, allow_pickle=True)
@@ -522,7 +673,7 @@ def load_today_history_from_file(context):
 
     for symbol_id in context.subscription_stock_arr:
         if symbol_id in context.all_his_today_data_dic.keys():
-            for min_data in context.all_his_data_dic[symbol_id]:
+            for min_data in context.all_his_today_data_dic[symbol_id]:
                 amount = min_data['amount']
                 eob = min_data['eob']
 
@@ -532,6 +683,9 @@ def load_today_history_from_file(context):
                 agility_time = context.estimate_dic[temp_data_time]
                 context.all_agility_data_info_dic[min_data['symbol']][agility_time].current_amount += amount
 
+    # for key, value in context.all_agility_data_info_dic.items():
+    #     for kk, vv in value.items():
+    #         print(f"current amount:{kk}|{vv.current_amount}")
 
     print(f"load today history success :{len(context.his_data_for_today)}")
 
