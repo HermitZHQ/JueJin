@@ -129,7 +129,7 @@ class TargetInfo:
         self.price = 0
         self.first_record_flag = False
         self.pre_close = 0
-        self.vwap = 0
+        self.vwap = 0 # 持仓均价
         self.upper_limit = 0 # 涨停价
         self.lower_limit = 0
         self.suspended = False # 是否停牌
@@ -700,6 +700,7 @@ def init(context):
     # 我目前想法是2点59分的时候，去把这个值覆写到mv:0
     context.calculate_total_market_value_flag = False
     context.total_market_value_for_all_sell = 0
+    context.total_market_value_for_all_buy = 0
     # 记录卖出持仓信息dict，这样才能保证全部卖出后，或者重新启动脚本时，能够拿到正常值    
     context.sell_pos_dict = {}
     

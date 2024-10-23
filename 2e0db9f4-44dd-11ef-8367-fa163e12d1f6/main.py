@@ -53,7 +53,7 @@ class TargetInfo:
         self.price = 0
         self.first_record_flag = False
         self.pre_close = 0
-        self.vwap = 0
+        self.vwap = 0 # 持仓均价
         self.upper_limit = 0 # 涨停价
         self.lower_limit = 0
         self.suspended = False # 是否停牌

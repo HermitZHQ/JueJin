@@ -108,7 +108,7 @@ class TargetInfo:
         self.price = 0
         self.first_record_flag = False
         self.pre_close = 0
-        self.vwap = 0
+        self.vwap = 0 # 持仓均价
         self.upper_limit = 0 # 涨停价
         self.lower_limit = 0
         self.suspended = False # 是否停牌
@@ -788,6 +788,7 @@ def init(context):
     # 我目前想法是2点59分的时候，去把这个值覆写到mv:0
     context.calculate_total_market_value_flag = False
     context.total_market_value_for_all_sell = 0
+    context.total_market_value_for_all_buy = 0
     # 记录卖出持仓信息dict，这样才能保证全部卖出后，或者重新启动脚本时，能够拿到正常值    
     context.sell_pos_dict = {}
     
@@ -2861,6 +2862,32 @@ def output_final_statistics(context):
     over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
     auto_generate_sell_list_with_ids_file(context)
 
+def info_statistics_for_buy(context, tick):
+    if context.total_market_value_for_all_buy == 0:
+            for symb in context.ids_buy:
+                pos = context.account().position(symbol = symb, side = OrderSide_Buy)
+                # pos.volume，总持仓量，这里不再使用sell的可用持仓
+                amount = (pos.volume * pos.vwap) if pos else 0
+                # 如果有获取不到的amount，说明还没有完全买入，我们就直接退出，且清零统计数据
+                # 这样比较稳，因为有可能部分买入也会
+                if amount == 0:
+                    context.total_market_value_for_all_buy = 0
+                    print(f'[warning] amount of symb is 0, can not get total buy mv for now')
+                    return
+                context.ids_buy_target_info_dict[symb].hold = pos.volume
+                context.total_market_value_for_all_buy += amount
+    
+    total_mv = 0
+    for k,v in context.ids_buy_target_info_dict.items():
+        total_mv += (v.price * v.hold)
+        
+    if total_mv <= 0:
+        print(f'[error] get wrong total mv, in func info_statistics_for_buy')
+        return
+        
+    print(f'[买入时]总盈亏：{round(((total_mv - context.total_market_value_for_all_buy) / context.total_market_value_for_all_buy) * 100, 3)}%')
+        
+
 def info_statistics(context, tick):
     # 数据统计中的总市值不能再用账号的总市值了，因为都卖完以后，就不会变化了，但我们其实是想监控标的在3点前的最高整体盈利（时间）
     # cur_market_value = context.account().cash['market_value'] # 当前总市值
@@ -3158,6 +3185,7 @@ def on_tick(context, tick):
 
 
         info_statistics(context, tick)
+        info_statistics_for_buy(context, tick)
         context.tick_count_for_statistics = 0
         if invalid_sell_symbol != "":
             print(f"卖出列表中存在无法获取price的情况[{invalid_sell_symbol}]，等待一段时间（30s）后仍然无法获取到的，需要从配置列表中删除，删除后手动重置配置文件中的mv到-1，然后再刷新")
