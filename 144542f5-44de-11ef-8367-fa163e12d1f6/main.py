@@ -479,7 +479,9 @@ def record_data_in_excel(context):
         temp_increase_price = (float(today_price) - float(yesterday_price)) / float(yesterday_price)
         increase_price = round(temp_increase_price * 100, 2)
 
-        temp_order_dic[symbol_val.symbol] = increase_price
+        # 这里原本为根据涨幅来排序，现在更改为根据达标次数排序
+        # temp_order_dic[symbol_val.symbol] = increase_price
+        temp_order_dic[symbol_val.symbol] = len(symbol_val.record_agility_data)
 
     sorted_dic = sorted(temp_order_dic.items(), key=lambda item: item[1], reverse=True)
 
