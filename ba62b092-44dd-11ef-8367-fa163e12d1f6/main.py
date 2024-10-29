@@ -70,8 +70,9 @@ class DownloadHistoryC():
         # s_time = test_s_time
         # e_time = test_e_time
         #历史数据中，集合进价时间，25分整，无法拿到历史进价，要提前几秒
+        #掘金有点坑，泸市所有标的的集合进价会晚5秒中获取，所以09:25:00改为09:25:05
         s_25_hisroty_time = str(yesterday_date) + ' 09:24:57'
-        e_25_hisroty_time = str(yesterday_date) + ' 09:25:00'
+        e_25_hisroty_time = str(yesterday_date) + ' 09:25:05'   # ' 09:25:00' - ' 09:25:05'
 
         print(f"{s_time} To {e_time}")
         print(f"SECTION_HISTORY_STOCK_COUNT::{self.SECTION_HISTORY_STOCK_COUNT}")
@@ -86,6 +87,8 @@ class DownloadHistoryC():
         #这里我们用一个临时集合来接取数据，再将临时集合中的数据添加到his_data中
         temp_his_data = []
         temp_his_25_amount_data = []
+        # 为for循环里创建一个临时删选字典dic<symbol_id, amount>
+        temp_filtrate_dic = {}
         #先将存入集合中的标的代码，以SECTION_HISTORY_STOCK_COUNT为准拼接未字符串，用来分批次获得历史数据
         for item in self.context.subscription_stock_arr:
                 if temp_index == 0:
@@ -106,12 +109,26 @@ class DownloadHistoryC():
                     #重置temp_index以及temp_ids_str
                     temp_index = 0
                     temp_ids_str = ''
-
+                    
                     for temp_data in temp_his_25_amount_data:
                         #这里应该要新创建一个变量
                         temp_temp_data = temp_data
                         # self.his_data[temp_history_dic_index] = {'symbol':temp_data['symbol'], 'amount':temp_data['last_amount'], 'eob':temp_data['created_at']}
-                        self.his_25_amount_data_arr.append(temp_temp_data)
+                        # self.his_25_amount_data_arr.append(temp_temp_data)
+
+                        # 由于泸市25分钟集合进价需要延长5秒获取，但是其中就会存在一个问题
+                        # 这几秒中，同一标的有可能会来几条数据，其中只有一条有数据，其他都是0.0，所以需要筛选一下
+                        # 这里直接用替换的办法来筛选，也会有可能存在没有集合进价的情况，只是有可能
+                        # 这里的dic和arr存储的好像都是同一个对象，只要修改了dic里的，arr里的应该也会跟着变，需要尝试
+                        if temp_data['symbol'] not in temp_filtrate_dic.keys():
+                            temp_filtrate_dic[temp_data['symbol']] = temp_temp_data
+                            self.his_25_amount_data_arr.append(temp_temp_data)
+                        else:
+                            temp_filtrate_amount = temp_filtrate_dic[temp_data['symbol']]['last_amount']
+                            # 判断结果如果是0，就从dic中找到该对象，并修改它的amount值，从而达到修改arr里的值
+                            if int(temp_filtrate_amount) == 0:
+                                temp_filtrate_dic[temp_data['symbol']]['last_amount'] = temp_temp_data['last_amount']
+
                         # temp_history_dic_index += 1
 
                     #将temp_his_data装入his_data里面
@@ -144,7 +161,21 @@ class DownloadHistoryC():
                 #这里应该要新创建一个变量
                 temp_temp_data = temp_data
                 # self.his_data[temp_history_dic_index] = {'symbol':temp_data['symbol'], 'amount':temp_data['last_amount'], 'eob':temp_data['created_at']}
-                self.his_25_amount_data_arr.append(temp_temp_data)
+                # self.his_25_amount_data_arr.append(temp_temp_data)
+
+                # 由于泸市25分钟集合进价需要延长5秒获取，但是其中就会存在一个问题
+                # 这几秒中，同一标的有可能会来几条数据，其中只有一条有数据，其他都是0.0，所以需要筛选一下
+                # 这里直接用替换的办法来筛选，也会有可能存在没有集合进价的情况，只是有可能
+                # 这里的dic和arr存储的好像都是同一个对象，只要修改了dic里的，arr里的应该也会跟着变，需要尝试
+                if temp_data['symbol'] not in temp_filtrate_dic.keys():
+                    temp_filtrate_dic[temp_data['symbol']] = temp_temp_data
+                    self.his_25_amount_data_arr.append(temp_temp_data)
+                else:
+                    temp_filtrate_amount = temp_filtrate_dic[temp_data['symbol']]['last_amount']
+                    # 判断结果如果是0，就从dic中找到该对象，并修改它的amount值，从而达到修改arr里的值
+                    if int(temp_filtrate_amount) == 0:
+                        temp_filtrate_dic[temp_data['symbol']]['last_amount'] = temp_temp_data['last_amount']
+
                 # temp_history_dic_index += 1
 
             #将temp_his_data装入his_data里面
