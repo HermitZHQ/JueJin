@@ -47,6 +47,7 @@ class CashPoolInfo:
         self.sell_increase_rate = 0 # 暂时应该用不上，先理思路
         self.total_cash = 0 # 被分配到的总金额
         self.left_cash = 0 # 资金池各自的余额
+        self.get_back_cash = 0 # 卖出标的后，卖出的金额会重新加入到资金池，后面可能只会应用在切换资金池数量上面
 
         self.is_complete_but = False # 这个池子是否完成了购买任务,这里要看一下如何来判断(是否可以通过)
 
@@ -758,11 +759,20 @@ def init_cash_pool_method(context):
         # 当余额小于平均资金的时候，就将余额直接赋予资金池里的余额
         # 这个应该只会发生在最后一个资金池
         # 当昨日的资金池开始sell的时候，释放出来的余额加入到最后一个没有填满余额且没有买入标的资金池
-        if temp_left_cash < avgPoolCash:
+        # 这里逻辑还不够完整！！必须补全逻辑！！不然后面绝对会出问题！！！！！！
+        # 已经补全，但是需要多测试才行！！！！
+        if leftCash < avgPoolCash:
             temp_cash_pool.left_cash = temp_left_cash
+            # 初始化时，当整个账号内的余额小于平均资金时，将此余额赋予第一个资金池，并且归为0
+            # 这样的话，就代表不管目前分配到第几个资金池，整个账号中的余额已经分配完了，需要在后面的sell中
+            # 在后面sell的流程里面，当sell成功后，将释放的资金回收进资金池
+            temp_cash_pool.get_back_cash = temp_left_cash
+            temp_left_cash = 0
         else:
             temp_cash_pool.left_cash = avgPoolCash
             temp_left_cash -= avgPoolCash
+            # 如果正常分配，回收资金就应和余额以及资金池的总资金一样，方便后面sell流程里回收资金好判断
+            temp_cash_pool.get_back_cash = avgPoolCash
         context.account_system_info.cash_pool_dic[cash_index] = temp_cash_pool
 
     for key, value in context.account_system_info.cash_pool_dic.items():
@@ -3488,6 +3498,12 @@ def on_order_status(context, order):
     elif order.symbol in context.ids_buy_target_info_dict.keys():
         name = context.ids_buy_target_info_dict[order.symbol].name
 
+    # 找到该标的所在的资金池
+    temp_cash_pool = None
+    for pool_key, pool_value in context.account_system_info.cash_pool_dic.items():
+        if order.symbol in pool_value.symbol_id_dic.keys():
+            temp_cash_pool = pool_value
+            break
 
     if order.ord_rej_reason != 0:
         log(f"{order.symbol}:{name} 委托已被拒绝！具体原因如下：{order.ord_rej_reason_detail}")
@@ -3501,10 +3517,43 @@ def on_order_status(context, order):
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
 
+        print(f"order.side:{order.side}|OrderSide_Sell:{OrderSide_Sell}|OrderSide_Buy:{OrderSide_Buy}")
+
         #print(f"-------------------test order side:{order.side}")
         # 更新买卖方向的相关信息
         if order.side == OrderSide_Sell:
             update_sell_position_info(context, order.symbol, True, order.filled_vwap)
+
+            # 在这里，将释放出来的资金回收进各个资金池
+            # 后面这里回收卖出的资金，应该只会应用到切换资金池中，例如，头天为2个资金池，今天需要3个资金池
+            for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
+                # self.total_cash
+                # self.left_cash
+                # self.get_back_cash
+                temp_pool_total_cash = pool_back_value.pool_total_cash 
+                temp_pool_left_cash = pool_back_value.pool_left_cash
+                temp_pool_back_cash = pool_back_value.pool_back_cash
+
+                # 先判断总资金是否和回收资金匹配
+                if temp_pool_total_cash == temp_pool_back_cash:
+                    continue
+                # 当回收资金小于总资金的时候
+                elif temp_pool_back_cash < temp_pool_total_cash:
+                    # order.filled_amount
+                    # 先已回收资金加上即将回收的资金是否大于总资金
+                    if (temp_pool_back_cash + order.filled_amount) > temp_pool_total_cash:
+                        # 得到这个差值，让它刚好等于总资金，而且！要将剩余的释放出来的资金赋予其他资金池，这里稍微有点复杂了，慢点写！
+                        # 这里先直接赋值了，剩下的再说吧！
+                        temp_difference_value = temp_pool_total_cash - temp_pool_back_cash
+                        # 将这个差值再次给到回收资金与余额里
+                        pool_back_value.pool_back_cash += temp_difference_value
+                        pool_back_value.pool_left_cash += temp_difference_value
+                    else:
+                        # 如果不是上面情况就直接赋值
+                        pool_back_value.pool_back_cash += order.filled_amount
+                        pool_back_value.pool_left_cash += order.filled_amount
+
+
         elif order.side == OrderSide_Buy:
             update_buy_info(context, order.symbol, order.filled_vwap)
             context.ids[order.symbol].already_buy_in_flag = True
@@ -3523,6 +3572,10 @@ def on_order_status(context, order):
             if (context.ids[order.symbol].buy_with_num != 0):
                 context.ids[order.symbol].buy_with_num = 0
                 context.ids[order.symbol].buy_with_num_handled_flag = True
+
+            # 对买入的标的所对应的资金池余额更新
+            print(f"pool left_cash:{temp_cash_pool.left_cash}|order.filled_amount:{order.filled_amount}")
+            temp_cash_pool.left_cash -= order.filled_amount
             
 
     # [MAYBE TODO]订单部分成交的话（status == 2），暂不消除订单记录--------
@@ -3538,6 +3591,13 @@ def on_order_status(context, order):
             # 更新已买入的仓位数量：为了解决pos中取出的仓位小几率刷新不及时的问题
             # 部成的情况下，不能直接记录到总数，我们只需要一直更新（注意这里不是加总）部成值即可，直到撤销订单激活的时候，才加总
             context.ids_buy_target_info_dict[order.symbol].partial_holding = order.filled_volume
+            # 由于在购买函数里，之前是直接获取剩余金额，但是由于现在需要更改为资金池的概念
+            # 所以现在每个对应的资金池里的余额需要在订单完成后实时的减去成交的金额
+            # 根据文档，filled_amount是已成交金额，应该可以不用自己算了，测试一下看看
+            print(f"pool left_cash:{temp_cash_pool.left_cash}|order.filled_amount:{order.filled_amount}")
+            temp_cash_pool.left_cash -= order.filled_amount
+            
+
 
     # 订单已撤销的话（status == 5），可以消除订单记录
     if order.status == OrderStatus_Canceled:
