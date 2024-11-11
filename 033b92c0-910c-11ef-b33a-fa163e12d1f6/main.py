@@ -3487,6 +3487,11 @@ OrderStatus_Suspended = 9             # 挂起 （无效）
 OrderStatus_PendingNew = 10           # 待报
 OrderStatus_Expired = 12              # 已过期
 '''
+
+# 当订单失败的时候(撤单，被拒等等)，将撤销的资金拿回到原本的资金池中
+def when_oder_faild_get_back_cash(context, order, cash_pool):
+    cash_pool.pool_left_cash += order.filled_amount
+
 # 处理订单状态变化函数--------
 def on_order_status(context, order):
     #print('--------on_order_status')
@@ -3510,6 +3515,9 @@ def on_order_status(context, order):
         # 被拒绝后，可以消除订单的记录
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
+        # 当为购买order的时候，将被拒后的资金回收进相应的资金池
+        if order.side == OrderSide_Buy:
+            when_oder_faild_get_back_cash(context, order, temp_cash_pool)
 
     # 订单全部成交的话（status == 3），可以消除订单记录
     if order.status == OrderStatus_Filled:
@@ -3611,11 +3619,18 @@ def on_order_status(context, order):
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
 
+            # 当为购买order的时候，将被拒后的资金回收进相应的资金池
+            when_oder_faild_get_back_cash(context, order, temp_cash_pool)
+
     # 订单已过期的话（status == 12），可以消除订单记录
     if order.status == OrderStatus_Expired:
         log(f'{order.symbol}:{name} 订单已过期')
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
+
+        # 当为购买order的时候，将被拒后的资金回收进相应的资金池
+        if order.side == OrderSide_Buy:
+            when_oder_faild_get_back_cash(context, order, temp_cash_pool)
 
 # 委托执行回报事件
 # 响应委托被执行事件，委托成交或者撤单拒绝后被触发。
