@@ -27,14 +27,14 @@ buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 cash_pool_info_path = 'c:\\TradeLogs\\CashPool-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
+order_overtime = 2 # 设置的委托超时时间，超时后撤单，单位秒
 sell_all_time = "13:35"
 
 
 class AccountSystemInfo:
     # 整个策略所有相关设置
     def __init__(self):
-        self.cash_pool_count = 2 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
+        self.cash_pool_count = 3 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
         self.is_has_surplus_getback_cash = 0 # 多出来的回收资金
         
         self.cash_pool_dic = {} # 资金池dic<index, CashPoolInfo()>
@@ -762,7 +762,7 @@ def init_cash_pool_method(context):
         # 当昨日的资金池开始sell的时候，释放出来的余额加入到最后一个没有填满余额且没有买入标的资金池
         # 这里逻辑还不够完整！！必须补全逻辑！！不然后面绝对会出问题！！！！！！
         # 已经补全，但是需要多测试才行！！！！
-        if leftCash < avgPoolCash:
+        if temp_left_cash < avgPoolCash:  # leftCash -- temp_left_cash
             temp_cash_pool.left_cash = temp_left_cash
             # 初始化时，当整个账号内的余额小于平均资金时，将此余额赋予第一个资金池，并且归为0
             # 这样的话，就代表不管目前分配到第几个资金池，整个账号中的余额已经分配完了，需要在后面的sell中
@@ -3505,6 +3505,7 @@ OrderStatus_Expired = 12              # 已过期
 
 # 当卖单完成时(部分订单，全部订单)，回收释放出来的资金
 def when_sell_get_back_cash(context, order, part_or_all):
+    
     # 在这里，将释放出来的资金回收进各个资金池
     # 后面这里回收卖出的资金，应该只会应用到切换资金池中，例如，头天为2个资金池，今天需要3个资金池
     for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
@@ -3513,9 +3514,11 @@ def when_sell_get_back_cash(context, order, part_or_all):
         temp_pool_left_cash = pool_back_value.left_cash
         temp_pool_back_cash = pool_back_value.get_back_cash
 
+        temp_cash_pool_log = f""
+
         # 先判断总资金是否和回收资金匹配
         # 如果回收资金与该资金池总资金相当，说明该资金池已经回收完毕，跳过，到下一个资金池进行相关操作
-        if temp_pool_total_cash == temp_pool_back_cash:
+        if temp_pool_back_cash >= temp_pool_back_cash:
             continue
         # 当回收资金小于总资金的时候
         elif temp_pool_back_cash < temp_pool_total_cash:
@@ -3524,7 +3527,7 @@ def when_sell_get_back_cash(context, order, part_or_all):
             current_order_filled_amount = round(order.filled_amount, 3) - context.ids_virtual_sell_target_info_dict[order.symbol].last_sell_complete_amount
             
             # 是否还有剩余资金需要回收
-            # 由于这里比较复杂，先保存到system_account里的字段里，后续再看怎么操作吧    --  context.account_system_info.self.is_has_surplus_getback_cash
+            # 由于这里比较复杂，先保存到system_account里的字段里，后续再看怎么操作吧    --  context.account_system_info.is_has_surplus_getback_cash
             is_has_surplus_getback_cash = 0
 
             # 先判断，这里已回收资金与即将回收资金，加起来是否已经大于了该资金池的总资金
@@ -3538,7 +3541,7 @@ def when_sell_get_back_cash(context, order, part_or_all):
 
                 # 暂时将这里剩余的且未回收的资金加进整个系统待回收资金里面，后续再想想办法看怎么把这个加回去
                 is_has_surplus_getback_cash = current_order_filled_amount - temp_difference_value
-                context.account_system_info.self.is_has_surplus_getback_cash += is_has_surplus_getback_cash
+                context.account_system_info.is_has_surplus_getback_cash += is_has_surplus_getback_cash
 
             else:
                 # 如果不是上面情况就直接赋值
@@ -3549,6 +3552,44 @@ def when_sell_get_back_cash(context, order, part_or_all):
 
             temp_cash_pool_log += f"!卖出后-{part_or_all}! 当前资金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash}"
             log(temp_cash_pool_log)
+
+    # 这里新增一个，当整个系统回收资金里，还有余额的话，就分配给其他未回收完的资金池
+    if context.account_system_info.is_has_surplus_getback_cash > 0:
+        for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
+            temp_pool_total_cash = pool_back_value.total_cash 
+            temp_pool_left_cash = pool_back_value.left_cash
+            temp_pool_back_cash = pool_back_value.get_back_cash
+
+            temp_cash_pool_log = f""
+
+            # 系统回收资金里面的余额
+            temp_system_get_back_cash = context.account_system_info.is_has_surplus_getback_cash
+
+            # 还是和上面相关计算一样
+            if temp_pool_back_cash >= temp_pool_back_cash:
+                continue
+            elif temp_pool_back_cash < temp_pool_total_cash:
+                # 先判断，这里已回收资金与即将回收资金，加起来是否已经大于了该资金池的总资金
+                if (temp_pool_back_cash +  temp_system_get_back_cash) > temp_pool_total_cash:
+                    # 计算多少能够补满当前资金池的回收资金的差值
+                    temp_difference_value = temp_pool_total_cash - temp_pool_back_cash
+                    # 回补回收资金以及余额
+                    pool_back_value.get_back_cash += temp_difference_value
+                    pool_back_value.left_cash += temp_difference_value
+                    # 回补完后，再在系统回收资金中减去已补的资金
+                    context.account_system_info.is_has_surplus_getback_cash -=  temp_difference_value
+            
+            else:
+                # 如果不是上面情况就直接赋值
+                pool_back_value.get_back_cash +=  temp_system_get_back_cash
+                pool_back_value.left_cash += temp_system_get_back_cash
+                # 系统资金全部回补完后，归零
+                context.account_system_info.is_has_surplus_getback_cash = 0
+
+            temp_cash_pool_log += f"!从系统回收资金中回补资金池-{part_or_all}! 回补金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash}"
+            log(temp_cash_pool_log)
+
+
 
 # 当订单失败的时候(撤单，被拒等等)，将撤销的资金拿回到原本的资金池中
 def when_oder_faild_get_back_cash(context, order, cash_pool):
@@ -3630,6 +3671,9 @@ def on_order_status(context, order):
 
             temp_cash_pool.left_cash = temp_cash_pool.left_cash - (round(order.filled_amount, 3) - temp_cash_pool.symbol_last_complete_amount_dic[order.symbol])
             temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = round(order.filled_amount, 3)
+
+            # 在完结订单后，好需要把上次完成金额重置为0
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = 0
 
             # 这里更新完后，重新将此赋值回去，试试看
             # context.account_system_info.cash_pool_dic[temp_current_cash_pool_index] = temp_cash_pool
