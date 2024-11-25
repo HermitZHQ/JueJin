@@ -34,7 +34,7 @@ sell_all_time = "13:35"
 class AccountSystemInfo:
     # 整个策略所有相关设置
     def __init__(self):
-        self.cash_pool_count = 3 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
+        self.cash_pool_count = 2 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
         self.is_has_surplus_getback_cash = 0 # 多出来的回收资金
         
         self.cash_pool_dic = {} # 资金池dic<index, CashPoolInfo()>
@@ -3501,11 +3501,16 @@ OrderStatus_Rejected = 8              # 已拒绝
 OrderStatus_Suspended = 9             # 挂起 （无效）
 OrderStatus_PendingNew = 10           # 待报
 OrderStatus_Expired = 12              # 已过期
+OrderSide_Unknown = 0
+OrderSide_Buy = 1             # 买入
+OrderSide_Sell = 2            # 卖出
 '''
 
 # 当卖单完成时(部分订单，全部订单)，回收释放出来的资金
 def when_sell_get_back_cash(context, order, part_or_all):
     
+    log(f"!卖出{part_or_all}完成! 开始回收释放出来的资金")
+
     # 在这里，将释放出来的资金回收进各个资金池
     # 后面这里回收卖出的资金，应该只会应用到切换资金池中，例如，头天为2个资金池，今天需要3个资金池
     for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
@@ -3516,9 +3521,11 @@ def when_sell_get_back_cash(context, order, part_or_all):
 
         temp_cash_pool_log = f""
 
+        log(f"!当前回-收准备资金池下标{pool_back_key} 前-余额:{temp_pool_left_cash} 前-已回收资金:{temp_pool_back_cash} 前-系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}")
+
         # 先判断总资金是否和回收资金匹配
-        # 如果回收资金与该资金池总资金相当，说明该资金池已经回收完毕，跳过，到下一个资金池进行相关操作
-        if temp_pool_back_cash >= temp_pool_back_cash:
+        # 如果回收资金与该资金池总资金相当，说明该资金池已经回收完毕，跳过，到下一个资金池进行相关操作  temp_pool_back_cash -- temp_pool_total_cash
+        if temp_pool_back_cash >= temp_pool_total_cash:
             continue
         # 当回收资金小于总资金的时候
         elif temp_pool_back_cash < temp_pool_total_cash:
@@ -3553,6 +3560,8 @@ def when_sell_get_back_cash(context, order, part_or_all):
             temp_cash_pool_log += f"!卖出后-{part_or_all}! 当前资金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash}"
             log(temp_cash_pool_log)
 
+        log(f"!当前回收-完成资金池下标{pool_back_key} 后-余额:{pool_back_value.left_cash} 后-已回收资金:{pool_back_value.get_back_cash} 后-系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}")
+
     # 这里新增一个，当整个系统回收资金里，还有余额的话，就分配给其他未回收完的资金池
     if context.account_system_info.is_has_surplus_getback_cash > 0:
         for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
@@ -3566,7 +3575,7 @@ def when_sell_get_back_cash(context, order, part_or_all):
             temp_system_get_back_cash = context.account_system_info.is_has_surplus_getback_cash
 
             # 还是和上面相关计算一样
-            if temp_pool_back_cash >= temp_pool_back_cash:
+            if temp_pool_back_cash >= temp_pool_total_cash:
                 continue
             elif temp_pool_back_cash < temp_pool_total_cash:
                 # 先判断，这里已回收资金与即将回收资金，加起来是否已经大于了该资金池的总资金
@@ -3586,7 +3595,7 @@ def when_sell_get_back_cash(context, order, part_or_all):
                 # 系统资金全部回补完后，归零
                 context.account_system_info.is_has_surplus_getback_cash = 0
 
-            temp_cash_pool_log += f"!从系统回收资金中回补资金池-{part_or_all}! 回补金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash}"
+            temp_cash_pool_log += f"!从系统回收资金中回补资金池-{part_or_all}! 回补金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash} 系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}"
             log(temp_cash_pool_log)
 
 
@@ -3600,6 +3609,8 @@ def when_oder_faild_get_back_cash(context, order, cash_pool):
 def on_order_status(context, order):
     #print('--------on_order_status')
     #print(order)
+
+    log(f"进入当前订单状态:{order.status} 买或卖:{order.side}")
 
     name = ""            
     if order.symbol in context.ids_virtual_sell_target_info_dict.keys():
@@ -3644,6 +3655,7 @@ def on_order_status(context, order):
         if order.side == OrderSide_Sell:
             update_sell_position_info(context, order.symbol, True, order.filled_vwap)
             # 回收资金到相应的资金池 -- all
+            log(f"--------准备进入资金回收阶段-all")
             when_sell_get_back_cash(context, order, "all")
 
         elif order.side == OrderSide_Buy:
@@ -3719,6 +3731,7 @@ def on_order_status(context, order):
 
         elif order.side == OrderSide_Sell:
             # 回收资金到相应的资金池 -- part
+            log(f"--------准备进入资金回收阶段-part")
             when_sell_get_back_cash(context, order, "part")
 
 
