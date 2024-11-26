@@ -3588,12 +3588,12 @@ def when_sell_get_back_cash(context, order, part_or_all):
                     # 回补完后，再在系统回收资金中减去已补的资金
                     context.account_system_info.is_has_surplus_getback_cash -=  temp_difference_value
             
-            else:
-                # 如果不是上面情况就直接赋值
-                pool_back_value.get_back_cash +=  temp_system_get_back_cash
-                pool_back_value.left_cash += temp_system_get_back_cash
-                # 系统资金全部回补完后，归零
-                context.account_system_info.is_has_surplus_getback_cash = 0
+                else:
+                    # 如果不是上面情况就直接赋值
+                    pool_back_value.get_back_cash +=  temp_system_get_back_cash
+                    pool_back_value.left_cash += temp_system_get_back_cash
+                    # 系统资金全部回补完后，归零
+                    context.account_system_info.is_has_surplus_getback_cash = 0
 
             temp_cash_pool_log += f"!从系统回收资金中回补资金池-{part_or_all}! 回补金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash} 系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}"
             log(temp_cash_pool_log)
