@@ -188,7 +188,7 @@ def refresh(context):
     context.ids = {}
     load_ids(context)
     context.get_all_buy_price_flag = False
-    context.get_all_sell_price_flag = True # False
+    context.get_all_sell_price_flag = False # False
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
@@ -936,7 +936,7 @@ def init(context):
     context.ids_buy_target_info_dict = {}
 
     # 手动产生buy_info的初始文件
-    save_buy_info(context)
+    # save_buy_info(context)
 
     # 初始化动态加载的id文件--------
     # context.ids这个东西是在这个函数里面初始化的
@@ -3166,6 +3166,8 @@ def info_statistics(context, tick):
     # 现在策略AB不能公用一套整体盈利的计算了，B这边要简单一些，就是用目前的总市值除记录的持仓市值就可以
     # B不存在今天没有卖掉的，不用分块考虑，即便有，占比也可以忽略，A的话就不行了，还要考虑去掉今天买入的部分
     # 版本1统计：不含止损止盈
+    # ！！注意！！目前发现每日15点30后出的txt最低数据和[止]最低数据为-100%，当cur_market_value为0时应该才会出现-100%的情况
+    # 看一下cur_market_value这个值，再向日志输出一下这个值
     total_float_profit_rate = ((cur_market_value - context.total_market_value_for_all_sell) / context.total_market_value_for_all_sell) if context.total_market_value_for_all_sell != 0 else 0
     context.statistics.cur_fpr = total_float_profit_rate
     if valid_tfpr_flag and (total_float_profit_rate > context.statistics.highest_total_fpr):
@@ -3368,6 +3370,7 @@ def on_tick(context, tick):
                 break
         if record_all:
             context.get_all_sell_price_flag = True
+            log(f"注意！注意！context.get_all_sell_price_flag:{context.get_all_sell_price_flag}")
 
     # 检测tick_count_for_statistics是否在收盘后出现了，次数累加不够的情况？？
     if (context.test_info) == 6:
@@ -3649,6 +3652,14 @@ def on_order_status(context, order):
         log(f'{order.symbol}:{name} 所有委托订单已成，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
+            log(f"所有订单已完结，消除订单记录{order.symbol}:{name}")
+
+        # 由于观察到会又重复进入的现象，根据逻辑来说第一次进入这里，完结后会消除订单记录了
+        # 所以这里当它没在订单记录里的时候直接尝试返回，观察下看能不能解决重复的问题
+        # 先尝试这样解决试试
+        if order.symbol not in context.client_order.keys():
+            log(f"!注意!重复进入完结订单委托 返回{order.symbol}:{name}")
+            return
 
         #print(f"-------------------test order side:{order.side}")
         # 更新买卖方向的相关信息
@@ -3668,6 +3679,9 @@ def on_order_status(context, order):
 
             # 更新已买入的仓位数量：为了解决pos中取出的仓位小几率刷新不及时的问题
             # 全部成交的情况下，不需要用到partial的值，直接加这里的值就可以
+            # ！！注意！！这里在log日志中发现，会有已经完结的订单，但是再次重复进入到这里的情况
+            # 例如预计买入18000，重复进入这里后就变成36000，但是掘金上显示的依然是18000
+            # 详情可以查看20241129日log日志的358行开始(该日志已经保存)
             context.ids_buy_target_info_dict[order.symbol].total_holding += order.filled_volume
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
