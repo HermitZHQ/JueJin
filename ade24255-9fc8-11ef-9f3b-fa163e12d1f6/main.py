@@ -14,11 +14,11 @@ import re
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
-def StrategyB():
+def StrategyBTemp():
     pass
 
 # 全局需要修改的变量，如果策略变化（比如买卖变化，策略本身变化）都应该调整下面的值
-str_strategy = 'B'
+str_strategy = 'B-Temp'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path = 'c:\\TradeLogs\\IDs-' + str_strategy + '.txt'
 pos_info_path = 'c:\\TradeLogs\\Pos-' + str_strategy + '.npy'
@@ -27,7 +27,7 @@ buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 cash_pool_info_path = 'c:\\TradeLogs\\CashPool-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
+order_overtime = 2 # 设置的委托超时时间，超时后撤单，单位秒
 sell_all_time = "13:35"
 
 
@@ -188,7 +188,7 @@ def refresh(context):
     context.ids = {}
     load_ids(context)
     context.get_all_buy_price_flag = False
-    context.get_all_sell_price_flag = False # False
+    context.get_all_sell_price_flag = True # False
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
@@ -936,7 +936,7 @@ def init(context):
     context.ids_buy_target_info_dict = {}
 
     # 手动产生buy_info的初始文件
-    # save_buy_info(context)
+    save_buy_info(context)
 
     # 初始化动态加载的id文件--------
     # context.ids这个东西是在这个函数里面初始化的
@@ -3835,7 +3835,7 @@ if __name__ == '__main__':
         backtest_slippage_ratio回测滑点比例
         backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='b0bf8bb5-44de-11ef-8367-fa163e12d1f6',
+    run(strategy_id='ade24255-9fc8-11ef-9f3b-fa163e12d1f6',
         filename='main.py',
         mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',

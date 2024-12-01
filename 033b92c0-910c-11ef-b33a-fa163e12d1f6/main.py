@@ -3650,9 +3650,6 @@ def on_order_status(context, order):
     # 订单全部成交的话（status == 3），可以消除订单记录
     if order.status == OrderStatus_Filled:
         log(f'{order.symbol}:{name} 所有委托订单已成，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
-        if order.symbol in context.client_order.keys():
-            del context.client_order[order.symbol]
-            log(f"所有订单已完结，消除订单记录{order.symbol}:{name}")
 
         # 由于观察到会又重复进入的现象，根据逻辑来说第一次进入这里，完结后会消除订单记录了
         # 所以这里当它没在订单记录里的时候直接尝试返回，观察下看能不能解决重复的问题
@@ -3660,6 +3657,10 @@ def on_order_status(context, order):
         if order.symbol not in context.client_order.keys():
             log(f"!注意!重复进入完结订单委托 返回{order.symbol}:{name}")
             return
+
+        if order.symbol in context.client_order.keys():
+            del context.client_order[order.symbol]
+            log(f"所有订单已完结，消除订单记录{order.symbol}:{name}")
 
         #print(f"-------------------test order side:{order.side}")
         # 更新买卖方向的相关信息
