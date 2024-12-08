@@ -27,7 +27,7 @@ buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
 cash_pool_info_path = 'c:\\TradeLogs\\CashPool-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 2 # 设置的委托超时时间，超时后撤单，单位秒
+order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
 sell_all_time = "13:35"
 
 
@@ -37,6 +37,9 @@ class AccountSystemInfo:
         self.cash_pool_count = 2 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
         self.is_has_surplus_getback_cash = 0 # 多出来的回收资金
         
+        self.all_sell_highest_arr = [0.015, 0.016] # 止盈，每个资金池对应的激活所有卖出的整体收益百分比，例如上面资金池为2，这里就需要2个，为3就需要3个，暂时这样吧(后面可以尝试改为配置文件)
+        self.all_sell_lowest_arr = [-0.04, -0.05] # 止损，同上同理
+
         self.cash_pool_dic = {} # 资金池dic<index, CashPoolInfo()>
         self.yesterday_cash_pool_dic = {} # 昨日资金池相关信息,dic<index, CashPoolInfo()>
 
@@ -50,8 +53,13 @@ class CashPoolInfo:
         self.total_cash = 0 # 被分配到的总金额
         self.left_cash = 0 # 资金池各自的余额
         self.get_back_cash = 0 # 卖出标的后，卖出的金额会重新加入到资金池，后面可能只会应用在切换资金池数量上面
+        self.all_sell_highest = 0 # 止盈，整体最高
+        self.all_sell_lowest = 0 # 止损，整体最低
+        self.current_day_count = 0 # 当前天数，该资金池持续的天数，例如0就为当天买入，1为昨天，2为前天以此类推
 
         self.is_complete_buy = False # 这个池子是否完成了购买任务,这里要看一下如何来判断(是否可以通过)
+
+        self.begin_date = "" # 现在需要记录资金池的购买时间，如若达到第3天，并且都没有满足整体收益条件，会在第三天(买入当天算一天)14：50统一卖出
 
 
 class BuyMode:
@@ -188,7 +196,7 @@ def refresh(context):
     context.ids = {}
     load_ids(context)
     context.get_all_buy_price_flag = False
-    context.get_all_sell_price_flag = True # False
+    context.get_all_sell_price_flag = False # False
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
@@ -482,6 +490,9 @@ def load_ids(context):
                 if buy_rate == 0:
                     context.ids[str_tmp].buy_amount = buy_amount
             else:
+                # 20241208 这里需要注意一下
+                # 把下面这一段以及上面每个字段的设置，单独拿出来，放在一个函数中，用于当资金池达到触发条件
+                # 将该资金池的所有标的加入到context.ids这个dic中
                 context.ids[str_tmp] = LoadedIDsInfo()
                 context.ids[str_tmp].buy_flag = 1 if buy_flag else 0
                 context.ids[str_tmp].high_expected_flag = high_expect
@@ -506,6 +517,23 @@ def load_ids(context):
                 # [TODO]应该保存文件更稳
                 context.ids[str_tmp].buy_amount = buy_amount
                 
+    # 20241208 直接在这里遍历读取出来的头几天所买入的标的，加入到context.ids这个dic里
+    # 这样的话，应该会稍微简单点，现在所有的改动都尽量的顺着牛哥的思路来改
+    # 尽量不要以自己的思路为中心，把改动的地方拿出来重做，尽量不要，因为这样的后续可能会出很多问题
+    for key, value in context.account_system_info.yesterday_cash_pool_dic.items():
+        # print(f"symbol_id_dic:{value.symbol_id_dic}")
+        # print(f"begin_date:{value.begin_date}")
+
+        # 计算该资金池从买入到现在，一共多少天了
+        # 先判断是否该资金池是否有买入
+        # if value.begin_date != "":
+        #     value.current_day_count = calculate_day_count(context, value.begin_date, current_date)
+        # 首先判断，该资金池中是否存在有标的
+        if len(value.symbol_id_dic) != 0:
+            for symbol_key in value.symbol_id_dic.keys():
+                # 然后判断该标的是否存在于下面这个dic中，如果没有，进行该标的的单独的初始化
+                if symbol_key not in context.ids.keys():
+                    pass
 
     #print(f"below is context ids info:\n{context.ids}")
 
@@ -757,6 +785,7 @@ def init_cash_pool_method(context):
         temp_cash_pool = CashPoolInfo()
         # 需要通过总资金以及资金余额来判断每个资金池分的余额资金
         temp_cash_pool.total_cash = avgPoolCash
+
         # 当余额小于平均资金的时候，就将余额直接赋予资金池里的余额
         # 这个应该只会发生在最后一个资金池
         # 当昨日的资金池开始sell的时候，释放出来的余额加入到最后一个没有填满余额且没有买入标的资金池
@@ -775,6 +804,8 @@ def init_cash_pool_method(context):
             # 如果正常分配，回收资金就应和余额以及资金池的总资金一样，方便后面sell流程里回收资金好判断
             temp_cash_pool.get_back_cash = avgPoolCash
         context.account_system_info.cash_pool_dic[cash_index] = temp_cash_pool
+
+    #-------------------------
 
     # for key, value in context.account_system_info.cash_pool_dic.items():
     #     print(f"total cash:{value.total_cash}")
@@ -813,6 +844,22 @@ def save_cash_pool_info_file(context):
     # context.cash_pool_info_path
     np.save(cash_pool_info_path, context.account_system_info.cash_pool_dic)
 
+'''
+self.symbol_id_dic = {} # 把这个改为dic，直接装牛总写的那个buy_dic里的对象，当前资金池内得有关标的代码， dic<symbol_id, TargetInfo()>
+self.symbol_last_complete_amount_dic = {} # 这个dic对应的是每一次完成订单时所对应的成交额， dic<symbol_id, order.filled_amount>
+self.sell_increase_rate = 0 # 暂时应该用不上，先理思路
+self.total_cash = 0 # 被分配到的总金额
+self.left_cash = 0 # 资金池各自的余额
+self.get_back_cash = 0 # 卖出标的后，卖出的金额会重新加入到资金池，后面可能只会应用在切换资金池数量上面
+self.all_sell_highest = 0 # 止盈，整体最高
+self.all_sell_lowest = 0 # 止损，整体最低
+self.current_day_count = 0 # 当前天数，该资金池持续的天数，例如0就为当天买入，1为昨天，2为前天以此类推
+
+self.is_complete_buy = False # 这个池子是否完成了购买任务,这里要看一下如何来判断(是否可以通过)
+
+self.begin_date = "" # 现在需要记录资金池的购买时间，如若达到第3天，并且都没有满足整体收益条件，会在第三天(买入当天算一天)14：50统一卖出
+'''
+
 # 读取资金池.npy文件
 def load_cash_pool_info_file(context):
     temp_yesterday_cash_pool_dic = np.load(cash_pool_info_path, allow_pickle=True)
@@ -822,12 +869,47 @@ def load_cash_pool_info_file(context):
     # 尝试通过对象里的symbol_ids_arr来判断，这样可能会方便后续的相关判断
     context.account_system_info.yesterday_cash_pool_dic = temp_yesterday_cash_pool_dic
 
+    # 获取今日日期
+    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+
     for key, value in context.account_system_info.yesterday_cash_pool_dic.items():
-        print(f"total cash:{value.total_cash}")
-        print(f"left cash:{value.left_cash}")
+        # print(f"symbol_id_dic:{value.symbol_id_dic}")
+        # print(f"begin_date:{value.begin_date}")
+
+        # 计算该资金池从买入到现在，一共多少天了
+        # 先判断是否该资金池是否有买入
+        if value.begin_date != "":
+            value.current_day_count = calculate_day_count(context, value.begin_date, current_date)
 
     print(f"load yesterday cash pool success :{len(temp_yesterday_cash_pool_dic)}")
 
+# 计算天数，资金池的开始时间，到当日，共多少天
+def calculate_day_count(context, start_date, end_date):
+    # 将字符串转换为日期对象（如果输入是字符串）
+    if isinstance(start_date, str):
+        start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
+    if isinstance(end_date, str):
+        end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d').date()
+    
+    # 初始化计数器
+    workdays_count = 0
+    
+    # 当前日期设为起始日期
+    current_date = start_date
+    
+    # 循环直到当前日期超过结束日期
+    while current_date <= end_date:
+        # 如果当前日期不是星期六或星期天，则计数
+        if current_date.weekday() < 5:  # Monday is 0 and Sunday is 6
+            workdays_count += 1
+        # 移动到下一天
+        current_date += datetime.timedelta(days=1)
+    
+    # ！！注意！！
+    # 这里需要考虑一个节假日的问题
+    # 暂时解决办法，通过手动直接设置，用获得至今的天数减去手动设置(设置为节假日天数)的天数，得到至今实际天数
+
+    return workdays_count
 
 # 策略中必须有init方法
 def init(context):
@@ -936,10 +1018,11 @@ def init(context):
     context.ids_buy_target_info_dict = {}
 
     # 手动产生buy_info的初始文件
-    save_buy_info(context)
+    # save_buy_info(context)
 
     # 初始化动态加载的id文件--------
     # context.ids这个东西是在这个函数里面初始化的
+    load_cash_pool_info_file(context)
     load_ids(context)
 
     # 初始化动态参数--------
@@ -1001,10 +1084,15 @@ def init(context):
     context.ids_buy = []
     context.ids_sell = []
 
+    # 在创建资金池之前，需要先读取头一天的资金池相关信息
+    # 20241208 根据新需求开发，放这里可能还不行，需要放在load_ids(context)这个函数之前
+    # 需要把头天以及前天的等等资金池的标的全部读取出来，在load_ids里面加入进context.ids这个dic中，进行每只标的的初始化，以及方便后面的订阅
+    # load_cash_pool_info_file(context)
     # 初始化资金池
     init_cash_pool_method(context)
 
     for k, v in context.ids.items():
+        # 买入标的相关初始化
         if (v.buy_flag == 1):
             context.ids_buy_target_info_dict[k] = TargetInfo()
 
@@ -1048,15 +1136,62 @@ def init(context):
 
             else:
                 del context.ids_buy_target_info_dict[k]
+        # 卖出标的相关初始化
         else:
+            # 20241203 这里开始，改动可能会变的更复杂起来
+            # 现在将会以整个资金池为一个单位，当该标的所在的资金池，触发了整体止盈或止损
+            # 或者到第三天(买入当天算一天)，才会卖出
+            # 先尝试写出一个保存当天已完成买入后的.py文件，然后是读取.py文件
+            # .py的读取在init里进行，.py的保存在完全买入后
+            # 20241208 现在这里，不能从初始化中，将今日读取到的卖出的标的加入到卖出队列里
+            # 现在开始，首先需要判断标的所在的资金池是否触发了卖出条件
+            # 如果触发了，整个资金池的所有标的一同卖出，也就是加入到这个卖出队列里，尝试注释掉下方三行代码，并移动到判断触发条件的地方
             context.ids_sell.append(k)
             context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
             context.statistics.max_min_info_dict[k] = MaxMinInfo()
+
         handled_num += 1
         print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
     print(f"初始化总计耗时:[{time.time() - t:.4f}]s，标的总数[{len(context.ids.items())}]")
     context.buy_num = buy_num
     context.sell_num = len(context.ids) - buy_num
+
+    # 这里需要新增一个步骤，将读取出来的资金池相关信息，分配给当日的现有的资金池
+    # 为什么要在这里分配一次，因为上面那段代码，运行完后，当日的资金池才算初始化完成(将今日需买入的标的，分配给资金池)
+    for yesterday_cashpool_key, yesterday_cashpool_value in context.account_system_info.yesterday_cash_pool_dic.items():
+        # 先寻找昨日资金池中所被占用的资金池
+        if len(yesterday_cashpool_value.symbol_id_dic) != 0:
+            # 然后寻找今日资金池中未被占用的资金池
+            for today_cashpool_key, today_cashpool_value in context.account_system_info.cash_pool_dic.items():
+                if len(today_cashpool_value.symbol_id_dic) == 0:
+                    # 将昨日的资金池赋予今日未被占用的资金池
+                    context.account_system_info.cash_pool_dic[today_cashpool_key] = yesterday_cashpool_value
+
+    # log输出一下今日所有资金池相关信息
+    for key, value in context.account_system_info.cash_pool_dic.items():
+        temp_cash_pool_info_str = f""
+
+        # ！！注意！！ 这里赋予止盈和止损，如果后续真有需要，可能还需要做更改
+        # 目前是由顺序来分配止盈和止损，后续可能会更改为根据标的所在的资金池来设置不同的止盈和止损
+        # 为什么要在这里赋止盈和止损，因为上面代码在将昨日资金池分配给今日的时候，会覆盖掉初始化中的资金池
+        # 赋予止盈位
+        value.all_sell_highest = context.account_system_info.all_sell_highest_arr[key]
+        # 赋予止损位
+        value.all_sell_lowest = context.account_system_info.all_sell_lowest_arr[key]
+
+        temp_id_str = f""
+        for stock_key in value.symbol_id_dic.keys():
+            temp_id_str += f"{stock_key} "
+
+        temp_cash_pool_info_str += f"\n该资金池下标 {key}"
+        temp_cash_pool_info_str += f"\n标的信息 {temp_id_str}"
+        temp_cash_pool_info_str += f"\n该资金池完成买入时间 {value.begin_date}"
+        temp_cash_pool_info_str += f"\n距今日天数 {value.current_day_count}"
+        temp_cash_pool_info_str += f"\n止盈与止损位 {value.all_sell_highest} and {value.all_sell_lowest}"
+
+        log(temp_cash_pool_info_str)
+    log(f"============================")
+
 
     # 检测一次是否有删除的id，在保存的ids_virtual_sell_target_info_dict中，应该去除（停牌等），否则无法正常统计
     del_keys = []
@@ -3358,6 +3493,8 @@ def on_tick(context, tick):
         if record_all:
             context.get_all_buy_price_flag = True
 
+    # 20241208 注意这里，此字段context.get_all_sell_price_flag应该为进入卖出流程的判断字段
+    # 也就是说，初始化时，我们不把卖出标的加入到下方的dic中，可能就不会直接进入卖出流程
     invalid_sell_symbol = ""
     if (not context.get_all_sell_price_flag):
         record_all = True
@@ -3433,6 +3570,8 @@ def on_tick(context, tick):
         # print(f"{context.ids[tick.symbol].buy_flag}|{context.get_all_buy_price_flag}")
         if (context.ids[tick.symbol].buy_flag == 1) and (context.get_all_buy_price_flag):
             try_buy_strategyB(context, tick)
+        # 20241208 这里由于策略B的整个卖出部分基础结构彻底不一样
+        # 尝试从这里下手，来更改卖出条件
         if (context.ids[tick.symbol].buy_flag == 0) and (context.get_all_sell_price_flag):
             try_sell_strategyB(context, tick)
     # 策略B改版1（存在滚动买入和卖出，存在单只操作）
@@ -3677,6 +3816,34 @@ def on_order_status(context, order):
             # 根据不保存文件还好点，不然临时要增加就不太好操作？？
             if order.symbol not in context.already_buy_in_keys:
                 context.already_buy_in_keys.append(order.symbol)
+
+            # 尝试在这里添加保存的买入信息
+            # 遍历该标的所在的资金池，判断该资金池里的所有标的是否都已经完成了买入操作
+            # 然后保存到资金池的.py文件中
+            for check_cash_key, check_cash_value in context.account_system_info.cash_pool_dic.items():
+                # 找到该标的所在资金池
+                if order.symbol in check_cash_value.symbol_id_dic.keys():
+                    temp_is_all_done = True
+                    for check_symbol in check_cash_value.symbol_id_dic.keys():
+                        # 判断该资金池中每一支是否都完成了买入操作
+                        # 注意！！这个操作可能会涉及到涨停，停牌等相关操作，相关操作后续再说吧！！
+                        if context.ids[check_symbol].already_buy_in_flag == False:
+                            temp_is_all_done = False
+                            break
+                    
+                    # 当判断完该资金池内的所有标的后，判断是否可以进行文件的保存
+                    if temp_is_all_done:
+                        save_buy_complete_date = datetime.datetime.now().strftime('%Y-%m-%d')
+                        # 格式化日期为字符串（如果需要）
+                        context.account_system_info.cash_pool_dic[check_cash_key].begin_date = save_buy_complete_date
+                        context.account_system_info.cash_pool_dic[check_cash_key].is_complete_buy = True
+
+                        # 注意！在保存文件之前，一定要将昨日的.py文件读取出来
+                        save_cash_pool_info_file(context)
+                        log(f"!!所有标的购买完成 保存进.py文件")
+
+                    #这里break为了防止遍历其他无用的资金池
+                    break
 
             # 更新已买入的仓位数量：为了解决pos中取出的仓位小几率刷新不及时的问题
             # 全部成交的情况下，不需要用到partial的值，直接加这里的值就可以
