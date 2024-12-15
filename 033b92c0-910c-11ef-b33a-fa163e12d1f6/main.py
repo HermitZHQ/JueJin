@@ -11,6 +11,7 @@ import math
 import numpy as np
 import pickle
 import re
+import os
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
@@ -34,14 +35,19 @@ sell_all_time = "13:35"
 class AccountSystemInfo:
     # 整个策略所有相关设置
     def __init__(self):
-        self.cash_pool_count = 2 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
+        self.cash_pool_count = 3 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
+        self.sell_day_count = 3 # 判断资金池，在没有达到止盈或者止损的情况下，当超过此天数，就全部卖出
         self.is_has_surplus_getback_cash = 0 # 多出来的回收资金
         
-        self.all_sell_highest_arr = [0.015, 0.016] # 止盈，每个资金池对应的激活所有卖出的整体收益百分比，例如上面资金池为2，这里就需要2个，为3就需要3个，暂时这样吧(后面可以尝试改为配置文件)
-        self.all_sell_lowest_arr = [-0.04, -0.05] # 止损，同上同理
+        self.all_sell_highest_arr = [0.015, 0.016, 0.017] # 止盈，每个资金池对应的激活所有卖出的整体收益百分比，例如上面资金池为2，这里就需要2个，为3就需要3个，暂时这样吧(后面可以尝试改为配置文件)
+        self.all_sell_lowest_arr = [-0.05, -0.06, -0.07] # 止损，同上同理
 
         self.cash_pool_dic = {} # 资金池dic<index, CashPoolInfo()>
         self.yesterday_cash_pool_dic = {} # 昨日资金池相关信息,dic<index, CashPoolInfo()>
+
+        self.is_just_begin = False # 专门为了防止，策略一启动就进入refresh
+
+        self.sell_all_stock_of_cash_pool = "15:55" # 当资金池达到最大天数后，达到当天时间就开始全部卖出
 
 class CashPoolInfo:
     # 每个单独资金池相关信息，后续可能会有一个配置文件，设置并存储每个资金池相关信息
@@ -56,6 +62,7 @@ class CashPoolInfo:
         self.all_sell_highest = 0 # 止盈，整体最高
         self.all_sell_lowest = 0 # 止损，整体最低
         self.current_day_count = 0 # 当前天数，该资金池持续的天数，例如0就为当天买入，1为昨天，2为前天以此类推
+        self.ready_for_sell_state = 0 # 判断该资金池处于什么阶段，0为未达到触发条件或刚买入，1为正在卖出，2为已经完成所有卖出
 
         self.is_complete_buy = False # 这个池子是否完成了购买任务,这里要看一下如何来判断(是否可以通过)
 
@@ -146,6 +153,7 @@ class TargetInfo:
         self.lower_limit = 0
         self.suspended = False # 是否停牌
         self.sold_flag = False
+        self.force_sell_self = False # 20241215 现在由于资金池的逻辑，每个资金池对应的个股都需要添加一个自身的强制卖出，而不是之前牛哥逻辑中的整体强制卖出
         self.sold_price = 0 # 虚拟卖出时的记录价格，用于统计信息
         self.sold_mv = 0 # 虚拟卖出后锁定的市值
         self.fpr = -1 # 浮动盈亏缓存
@@ -193,6 +201,9 @@ def log(msg):
     print(finalMsg)
 
 def refresh(context):
+    # 20241210 虽然不太明白，没有点击空白处，在策略启动的时候却依然会进入一次refresh
+    log(f"！！进入强制刷新流程！！")
+
     context.ids = {}
     load_ids(context)
     context.get_all_buy_price_flag = False
@@ -516,7 +527,11 @@ def load_ids(context):
                 # 只在初始化时，计算一次应该买入的量，否则后面余额发生变化就不对了
                 # [TODO]应该保存文件更稳
                 context.ids[str_tmp].buy_amount = buy_amount
-                
+
+    print(f"================================")
+    for key, value in context.ids.items():
+        print(f"{key}: buy_flag:{value.buy_flag}")
+
     # 20241208 直接在这里遍历读取出来的头几天所买入的标的，加入到context.ids这个dic里
     # 这样的话，应该会稍微简单点，现在所有的改动都尽量的顺着牛哥的思路来改
     # 尽量不要以自己的思路为中心，把改动的地方拿出来重做，尽量不要，因为这样的后续可能会出很多问题
@@ -533,9 +548,35 @@ def load_ids(context):
             for symbol_key in value.symbol_id_dic.keys():
                 # 然后判断该标的是否存在于下面这个dic中，如果没有，进行该标的的单独的初始化
                 if symbol_key not in context.ids.keys():
-                    pass
+                    context.ids[symbol_key] = LoadedIDsInfo()
+                    context.ids[symbol_key].buy_flag = 0
+                    context.ids[symbol_key].high_expected_flag = high_expect
+                    context.ids[symbol_key].force_sell_flag = force_sell
+                    context.ids[symbol_key].force_buy_flag = force_buy
+
+                    context.ids[symbol_key].buy_with_rate = buy_with_rate
+                    context.ids[symbol_key].buy_with_time = buy_with_time
+                    context.ids[symbol_key].buy_with_price = buy_with_price
+                    context.ids[symbol_key].buy_with_num = buy_with_num
+                    if buy_with_num > 0:
+                        context.ids[symbol_key].buy_with_num_need_handle = True
+                        context.ids[symbol_key].buy_with_num_handled_flag = False
+                    else:
+                        context.ids[symbol_key].buy_with_num_need_handle = False
+                    context.ids[symbol_key].sell_with_rate = sell_with_rate
+                    context.ids[symbol_key].sell_with_time = sell_with_time
+                    context.ids[symbol_key].sell_with_price = sell_with_price
+                    context.ids[symbol_key].sell_with_num = sell_with_num
+
+                    # 只在初始化时，计算一次应该买入的量，否则后面余额发生变化就不对了
+                    # [TODO]应该保存文件更稳
+                    context.ids[symbol_key].buy_amount = buy_amount
 
     #print(f"below is context ids info:\n{context.ids}")
+
+    print(f"================================")
+    for key, value in context.ids.items():
+        print(f"{key}: buy_flag:{value.buy_flag}")
 
 
 def over_write_mv(new_val):
@@ -685,9 +726,10 @@ def load_sell_position_info_with_init(context):
     #print(context.sell_pos_dict)
     #print("--------------------end load sell pos info\n")
 
-    for k,v in context.sell_pos_dict.items():
-        if (k in context.ids.keys()) and (context.ids[k].buy_flag == 0) and (k not in context.ids_virtual_sell_target_info_dict.keys()):
-            context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
+    # 20241209 这里先注释掉 看下还会不会卖出
+    # for k,v in context.sell_pos_dict.items():
+    #     if (k in context.ids.keys()) and (context.ids[k].buy_flag == 0) and (k not in context.ids_virtual_sell_target_info_dict.keys()):
+    #         context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
 
 #change mark2
 def save_buy_info(context):
@@ -761,6 +803,14 @@ def on_parameter(context, parameter):
             output_final_statistics(context)
     elif (parameter.key == 'Refresh'):
         log("重新载入ids，重新订阅！")
+        # 20241210 虽然不太清楚为什么，但是这里强制刷新，会在策略启动的时候进入一次这里
+        # 由于策略原因，尝试将这里改为，策略启动后拦截一次这里，不让它一启动就进一次这里
+        # 就目前观察来说，启动只会进入一次这里
+        if not context.account_system_info.is_just_begin:
+            # 注意，进一次这里，此bool就会变成True
+            context.account_system_info.is_just_begin = True
+            log("第一次从这里进的强制刷新流程！")
+            return
         refresh(context)
 
 # 初始化资金池
@@ -862,6 +912,13 @@ self.begin_date = "" # 现在需要记录资金池的购买时间，如若达到
 
 # 读取资金池.npy文件
 def load_cash_pool_info_file(context):
+
+    # 这里需要添加一个判断文件中是否有数据，如果没有直接返回，否则会报错
+    temp_is_empty = os.path.getsize(cash_pool_info_path)
+    if temp_is_empty == 0:
+        log(f"！！注意！！当日之前的资金池.np文件中没有数据")
+        return
+
     temp_yesterday_cash_pool_dic = np.load(cash_pool_info_path, allow_pickle=True)
     temp_yesterday_cash_pool_dic = dict(temp_yesterday_cash_pool_dic.tolist())
 
@@ -1056,7 +1113,7 @@ def init(context):
     context.Sell_All_Increase_Rate = 0.2
     context.sell_all_chase_raise_flag = False
     context.sell_all_chase_highest_record = -1.0
-    context.default_sell_all_increase_rate = 0.007
+    context.default_sell_all_increase_rate = 0.015
     context.sell_all_lower_limit = context.default_sell_all_increase_rate
     if context.strategy_info.B == 1:
         context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
@@ -1146,9 +1203,14 @@ def init(context):
             # 20241208 现在这里，不能从初始化中，将今日读取到的卖出的标的加入到卖出队列里
             # 现在开始，首先需要判断标的所在的资金池是否触发了卖出条件
             # 如果触发了，整个资金池的所有标的一同卖出，也就是加入到这个卖出队列里，尝试注释掉下方三行代码，并移动到判断触发条件的地方
-            context.ids_sell.append(k)
-            context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
-            context.statistics.max_min_info_dict[k] = MaxMinInfo()
+            # 这里先注释掉，不再卖
+            # 20241212 这里现在将添加在后面检测条件触发函数里 -- check_day_or_time_for_sell(context, tick)
+            # ---
+            # context.ids_sell.append(k)
+            # context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
+            # context.statistics.max_min_info_dict[k] = MaxMinInfo()
+            # ---
+            pass
 
         handled_num += 1
         print(f"初始化数据进度：Key[{k}] [{round(handled_num / len(context.ids.items()) * 100, 2)}%]")
@@ -1166,6 +1228,7 @@ def init(context):
                 if len(today_cashpool_value.symbol_id_dic) == 0:
                     # 将昨日的资金池赋予今日未被占用的资金池
                     context.account_system_info.cash_pool_dic[today_cashpool_key] = yesterday_cashpool_value
+                    break
 
     # log输出一下今日所有资金池相关信息
     for key, value in context.account_system_info.cash_pool_dic.items():
@@ -2498,6 +2561,7 @@ def try_sell_strategyB(context, tick):
     # 大于整体盈利卖出条件后，直接激活卖出条件（不再重置false）
     # false只在init时有一次，后续只要激活就全部卖出（只激活一次即可）
     # 只激活一次的策略，有可能带来了滑点严重的问题？？因为激活的瞬间，可能整体盈利还在抖动，所以导致一直有0.2%左右的差值？？所以需要改为反复激活，也就是激活后，也要保证后续的每只股卖出时都达到了整体收益？？（需要验证）
+    # 20241212 !注意!这里为整体止盈和止损，这里可能需要反复多看!!!
     if (not context.sell_with_total_float_profit_flag) and (valid_tfpr_flag) and (context.tfpr > context.Sell_All_Increase_Rate):
         context.sell_with_total_float_profit_flag = True
         log(f"-------->已激活整体盈利卖出条件，目前设定的整体盈利为：{context.Sell_All_Increase_Rate * 100}%，当前整体盈利为：{round(context.tfpr * 100, 3)}%")
@@ -2549,9 +2613,11 @@ def try_sell_strategyB(context, tick):
     # 配置文件支持的限时卖出ST10:00ST
     sell_condition9 = (now >= target_time_for_solo)
     sell_condition10 = (context.ids[tick.symbol].sell_with_num > 0)
+    # 20241215 添加个股的强制卖出条件
+    sell_condition11 = context.ids_virtual_sell_target_info_dict[tick.symbol].force_sell_self
 
     # 开始判断条件，并尝试卖出
-    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9 or sell_condition10:
+    if sell_condition1 or sell_condition2 or sell_condition3 or sell_condition4 or sell_condition5 or sell_condition6 or sell_condition7 or sell_condition8  or sell_condition9 or sell_condition10 or sell_condition11:
         msg = f"\n-------->>开始尝试卖出[{tick.symbol}:{name}]，当前持仓量:{curHolding} 现金余额:{round(leftCash, 3)} 当前持仓品种数量:{curHoldTypeNum}"
         msg += f"\n昨收价格:{round(pre_close, 2)} 今开价格:{round(tick.open, 2)} 瞬间价格:{round(tick.price, 2)} 成本价:{pos.vwap}"
         msg += f"\n卖出时盈亏百分比:{round(float_profit_rate * 100.0, 3)}% 是否为高预期{context.ids[tick.symbol].high_expected_flag}"
@@ -3440,9 +3506,104 @@ def info_statistics(context, tick):
         over_write_force_sell_all_flag('') # 重置强制卖出标记，避免忘记后，第二天被直接全卖
         auto_generate_sell_list_with_ids_file(context)
 
+
+'''
+context.account_system_info.
+self.sell_day_count = 3
+self.sell_all_stock_of_cash_pool = "14:35"
+
+context.account_system_info.cash_pool_dic.
+self.current_day_count = 0 # 当前天数，该资金池持续的天数，例如0就为当天买入，1为昨天，2为前天以此类推
+self.ready_for_sell_state = 0 # 判断该资金池处于什么阶段，0为未达到触发条件或刚买入，1为正在卖出，2为已经完成所有卖出
+
+context.ids_virtual_sell_target_info_dict.
+
+'''
+# 检测相关资金池止盈，止损，天数以及时间准备卖出
+def check_day_or_price_for_sell(context, tick):
+    # 这里应该还可以添加一个判断，可以适当的减少代码运行
+    # 当该标的为买入标的的时候，就返回，后面再说吧
+
+    # 找出该标的所在的资金池
+    find_cash_pool = None
+    find_cash_pool_index = -1
+    for find_key, find_value in context.account_system_info.cash_pool_dic.items():
+        if tick.symbol in find_value.symbol_id_dic.keys():
+            # 已找到该标的所处的资金池，并将该资金池单独拿出来
+            find_cash_pool = find_value
+            find_cash_pool_index = find_key
+            break
+
+    # print(f"symbol:{tick.symbol}|{find_cash_pool_index}")
+
+    
+    # 未找到资金池，或者该资金池正在卖出状态，则直接返回
+    # 先注释掉这里，由于新增的ready_for_sell_state字段，在头几天保存的.pyn文件中没有
+
+    # 暂时用这个判断返回，后面再删掉
+    if tick.symbol in context.ids_virtual_sell_target_info_dict.keys():
+        print(f"已在卖出队列，返回")
+        return
+
+    # 测试用----------- 后续删掉
+    # pos = context.account().position(symbol = tick.symbol, side = OrderSide_Buy)
+    # if not pos:
+    #     curHolding = 0
+    #     print(f"{tick.symbol} 未有持仓！！")
+    #     return
+    #     #print(f'{tick.symbol} cur holding: 0')
+    # else:
+    #     curHolding = pos.available_now
+    #     print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
+    # ----------------
+
+
+    #------------
+    # if find_cash_pool != None or find_cash_pool.ready_for_sell_state == 1:
+    #     log(f"!未找到该资金池，或者该资金池正在卖出状态! state:{find_cash_pool.ready_for_sell_state}")
+
+    #     # ---测试用
+    #     if find_cash_pool.ready_for_sell_state == 1:
+    #         temp_symbol_arr_str = f""
+    #         for key in context.ids_virtual_sell_target_info_dict.keys():
+    #             temp_symbol_arr_str += key + ","
+    #         log(temp_symbol_arr_str)
+    #     # --------
+
+    #     return
+    #------------
+
+    # 判断该资金池的持续时间是否达到上限
+    # 这里需要优先判断是否此资金池是否为None
+    if find_cash_pool != None:
+        # 判断天数
+        if find_cash_pool.current_day_count >= context.account_system_info.sell_day_count:
+            # 当天数达标后，开始判断当日时间
+            now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
+            target_time = datetime.datetime.strptime(str(context.now.date()) + context.account_system_info.sell_all_stock_of_cash_pool, '%Y-%m-%d%H:%M')
+
+            temp_symbol_arr_str = f"已将资金池下标为:{find_cash_pool_index} 的资金池中的标的加入卖出队列\n"
+            if now >= target_time:
+                # 资金池持续时间已经达到上限，准备开始卖出该资金池的全部标的
+                # 找出该资金池中所有标的
+                for k, v in find_cash_pool.symbol_id_dic.items():
+                    context.ids_sell.append(k)
+                    context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
+                    context.statistics.max_min_info_dict[k] = MaxMinInfo()
+                    temp_symbol_arr_str += k + ","
+
+                # 将该资金池的状态设置为卖出状态
+                # find_cash_pool.ready_for_sell_state = 1 # 先暂时注释掉
+                log(f"!已达到该资金池持有最高天数，且达到卖出时间 准备卖出该资金池所有标的!")
+                log(temp_symbol_arr_str)
+
+
+
 def on_tick(context, tick):
     # 测试
-    # return
+    check_day_or_price_for_sell(context, tick)
+    # 测试
+    return
     # 测试
 
     context.tick_count_for_statistics += 1
@@ -3462,7 +3623,9 @@ def on_tick(context, tick):
             context.ids_buy_target_info_dict[tick.symbol].first_record_flag = True
         # else:
         #     print(f"potential [buy]price error, == 0, [{tick.symbol}]")
-    if context.ids[tick.symbol].buy_flag == 0:
+    
+    # 20241211 添加一个判断条件，不然会报错
+    if context.ids[tick.symbol].buy_flag == 0 and tick.symbol in context.ids_virtual_sell_target_info_dict.keys():
         # 为什么这里判断大于0，因为这个订阅很扯，9点30之前有些票会给你发价格0过来，3点以后有些之前有效的票，也会发0给你，所以必须判断
         if tick.price > 0:
             context.ids_virtual_sell_target_info_dict[tick.symbol].price = tick.price
@@ -3495,8 +3658,9 @@ def on_tick(context, tick):
 
     # 20241208 注意这里，此字段context.get_all_sell_price_flag应该为进入卖出流程的判断字段
     # 也就是说，初始化时，我们不把卖出标的加入到下方的dic中，可能就不会直接进入卖出流程
+    # 20241211 这里再次添加一个判断，当sell_target_info_dic为空时，就不进这里
     invalid_sell_symbol = ""
-    if (not context.get_all_sell_price_flag):
+    if (not context.get_all_sell_price_flag) and len(context.ids_virtual_sell_target_info_dict) > 0:
         record_all = True
         for k,v in context.ids_virtual_sell_target_info_dict.items():
             # 这里用过first_record_flag比较，但是不行，验证发现price第一次记录了也很可能是0，原因不明
@@ -3508,6 +3672,26 @@ def on_tick(context, tick):
         if record_all:
             context.get_all_sell_price_flag = True
             log(f"注意！注意！context.get_all_sell_price_flag:{context.get_all_sell_price_flag}")
+
+    # 20241210 注意这里，现在需要将context.get_all_sell_price_flag设置为false
+    # 现在尝试当，sell_target_info_dic里没有标的的时候，将上面的字段设置为false
+    # 现在需要，是当该标的所在资金池达到卖出条件，才会将该资金池内所有标的加入到此dic中
+
+    # ------测试用 待删
+    # temp_log_massege = f""
+    # for k,v in context.ids_virtual_sell_target_info_dict.items():
+    #     temp_log_massege += f"{k}, "
+
+    # log(temp_log_massege)
+    # # 尝试强制把卖出信号设置为False
+    # context.get_all_sell_price_flag = False
+    # ----------------
+
+    if len(context.ids_virtual_sell_target_info_dict) == 0:
+        context.get_all_sell_price_flag = False
+        # ------测试用
+        # log(f"注意！注意！卖出标的目标信息集合中没有标的 context.get_all_sell_price_flag:{context.get_all_sell_price_flag}")
+        # -----------
 
     # 检测tick_count_for_statistics是否在收盘后出现了，次数累加不够的情况？？
     if (context.test_info) == 6:
@@ -3741,11 +3925,26 @@ def when_sell_get_back_cash(context, order, part_or_all):
             log(temp_cash_pool_log)
 
 
-
 # 当订单失败的时候(撤单，被拒等等)，将撤销的资金拿回到原本的资金池中
 def when_oder_faild_get_back_cash(context, order, cash_pool):
     log(f'!订单失败! 失败标的代码:{order.symbol} 回收金额:{order.filled_amount} 资金池余额:{cash_pool.left_cash}')
     cash_pool.left_cash +=  round(order.filled_amount, 3)
+
+# 20241213 这里需要添加一个，检查当前正在卖出的资金池是否已经全部卖出
+# 然后再对总资金池dic做一个清理，并保存
+def check_is_all_sell(context, order):
+    # pos = context.account().position(symbol = tick.symbol, side = OrderSide_Buy)
+    # if not pos:
+    #     curHolding = 0
+    #     print(f"{tick.symbol} 未有持仓！！")
+    #     return
+    #     #print(f'{tick.symbol} cur holding: 0')
+    # else:
+    #     curHolding = pos.available_now
+    #     print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
+    pass
+
+
 
 # 处理订单状态变化函数--------
 def on_order_status(context, order):
