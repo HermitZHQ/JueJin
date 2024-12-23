@@ -63,6 +63,7 @@ class CashPoolInfo:
         self.all_sell_lowest = 0 # 止损，整体最低
         self.current_day_count = 0 # 当前天数，该资金池持续的天数，例如0就为当天买入，1为昨天，2为前天以此类推
         self.ready_for_sell_state = 0 # 判断该资金池处于什么阶段，0为未达到触发条件或刚买入，1为正在卖出，2为已经完成所有卖出
+        self.cash_pool_total_amount = 0 # 20241222 该资金池中，所有标的买入后的总金额，注意，这里由每日开启策略后，从掘金上读取均价和持仓量计算得出
 
         self.is_complete_buy = False # 这个池子是否完成了购买任务,这里要看一下如何来判断(是否可以通过)
 
@@ -162,6 +163,10 @@ class TargetInfo:
         self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
 
         self.last_sell_complete_amount = 0 # 上一次卖单的成交金额，方便后续资金池回收资金
+        # 20241218 !!注意!!注意!!这里的2个值，将会涉及到后面的卖出逻辑，统计数据逻辑，由于统计这一模块，看了下牛哥的逻辑很复杂，外加上现在加入了资金池的逻辑，就变得更复杂了
+        # 现在尝试在这一块用自己的逻辑，看看能不能直接跳过牛哥的逻辑，或者在牛哥这一部分的逻辑尾部直接替换掉所需的值，例如每天的整体最高，整体最低，最后15：30出来的整体营收数据等等
+        self.total_amount_when_buy = 0 # 20241218 记录当该标的完成买入后，所花的总金额，这里暂时想的是在每一次启动策略初始化时，直接通过拉取该标的的平均价格以及持仓数量，计算出该标的所花金额，
+        self.total_amount_when_sell = 0 # 20241218 记录该标的，在彻底卖出后的总金额，注意，要记录卖出后的总金额，由于涉及到部成和全成，以及撤单后再部成和全成，这个值的记录逻辑可能会稍微有点复杂，还有已经卖一半断网，账号断开等等！先把逻辑写好，再来判断这些可能会出现的特殊状况
 
 class MaxMinInfo:
     def __init__(self):
@@ -1230,6 +1235,19 @@ def init(context):
                     context.account_system_info.cash_pool_dic[today_cashpool_key] = yesterday_cashpool_value
                     break
 
+    # 20241222 这里尝试添加，将已经初始化的资金池中，已经购买后的标的，由pos读取出均价，并计算书每个标的购买后的总金额
+    # pos = context.account().position(symbol = symb, side = OrderSide_Buy)
+    #         amount = (pos.available_now * pos.vwap) if pos else 0
+    #         context.total_market_value_for_all_sell += amount
+
+    # if value.begin_date != "":
+    for key, value in context.account_system_info.cash_pool_dic.items():
+        if value.begin_date != "":
+            for stock_key in value.symbol_id_dic.keys():
+                pos_read_vwap = context.account().position(symbol = stock_key, side = OrderSide_Buy)
+                print(f"cash_pool_index:{key}|symbol:{stock_key}|vwap:{round(pos_read_vwap.vwap, 2)}")
+
+
     # log输出一下今日所有资金池相关信息
     for key, value in context.account_system_info.cash_pool_dic.items():
         temp_cash_pool_info_str = f""
@@ -1257,6 +1275,9 @@ def init(context):
 
 
     # 检测一次是否有删除的id，在保存的ids_virtual_sell_target_info_dict中，应该去除（停牌等），否则无法正常统计
+    # 20241218 这里由于更改资金池的原因，可能在初始化的阶段就不会有标的了
+    # 但是可以参考这里，后面如果需要，例如当头天因为有标的在集合竞价阶段就涨停而没有买入，可以尝试通过是否有持仓来判断，从而删除
+    # 后面如果因为这种问题，出现了BUG就可以尝试这样解决一下
     del_keys = []
     for k in context.ids_virtual_sell_target_info_dict.keys():
         # 这里的条件不能是不存在就删，因为还有一种情况需要保留，就是sell列表为空的时候（否则删除后无法继续统计信息）
@@ -3589,6 +3610,8 @@ def check_day_or_price_for_sell(context, tick):
                 for k, v in find_cash_pool.symbol_id_dic.items():
                     context.ids_sell.append(k)
                     context.ids_virtual_sell_target_info_dict[k] = TargetInfo()
+                    # 20241215 这里还需要设置该资金池每个个股的强制卖出
+                    context.ids_virtual_sell_target_info_dict[k].force_sell_self = True
                     context.statistics.max_min_info_dict[k] = MaxMinInfo()
                     temp_symbol_arr_str += k + ","
 
