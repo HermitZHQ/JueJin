@@ -1618,7 +1618,7 @@ if __name__ == '__main__':
         backtest_slippage_ratio回测滑点比例
         backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='ef37e598-22d7-11ef-896e-00ff2b50aff6',
+    run(strategy_id='75bd0cb4-44de-11ef-8367-fa163e12d1f6',
         filename='main.py',
         mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',

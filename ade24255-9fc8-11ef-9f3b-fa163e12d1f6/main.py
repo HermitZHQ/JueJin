@@ -1,5 +1,5 @@
 # coding=utf-8
-# ------------------测试策略A
+# ------------------测试策略B
 # 相关指标：solo up 7% loss limit -3.5% total up 2% total sell time 13:35
 from __future__ import print_function, absolute_import
 from gm.api import *
@@ -14,26 +14,51 @@ import re
 
 # ！！警告！！复制这份代码的时候一定要注意修改下面的文件路径 + 策略模式 + 买入模式，其他不用改
 # 这样就可以把使用策略在一份代码内进行维护了，虽然量大，但是封装好的话，问题不大
-def StrategyA():
+def StrategyBTemp():
     pass
 
 # 全局需要修改的变量，如果策略变化（比如买卖变化，策略本身变化）都应该调整下面的值
-str_strategy = 'A'
+str_strategy = 'B-Temp'
 log_path = 'c:\\TradeLogs\\Trade' + str_strategy + '.txt'
 ids_path = 'c:\\TradeLogs\\IDs-' + str_strategy + '.txt'
 pos_info_path = 'c:\\TradeLogs\\Pos-' + str_strategy + '.npy'
 statistics_info_path = 'c:\\TradeLogs\\Sta-' + str_strategy + '.npy'
 buy_info_path = 'c:\\TradeLogs\\Buy-' + str_strategy + '.npy'
+cash_pool_info_path = 'c:\\TradeLogs\\CashPool-' + str_strategy + '.npy'
 
 side_type = OrderSide_Buy # 设置买卖方向，买卖是不一样的，脚本切换后，需要修改
-order_overtime = 3 # 设置的委托超时时间，超时后撤单，单位秒
-sell_all_time = "15:35"
+order_overtime = 2 # 设置的委托超时时间，超时后撤单，单位秒
+sell_all_time = "13:35"
+
+
+class AccountSystemInfo:
+    # 整个策略所有相关设置
+    def __init__(self):
+        self.cash_pool_count = 2 # 资金池数量，将总资金池平均分为多少个小资金池，以便后续的买入(每一轮买入将会用光一个资金池)
+        self.is_has_surplus_getback_cash = 0 # 多出来的回收资金
+        
+        self.cash_pool_dic = {} # 资金池dic<index, CashPoolInfo()>
+        self.yesterday_cash_pool_dic = {} # 昨日资金池相关信息,dic<index, CashPoolInfo()>
+
+class CashPoolInfo:
+    # 每个单独资金池相关信息，后续可能会有一个配置文件，设置并存储每个资金池相关信息
+    # 这里开始就可能会变得比较复杂了，想的有点过于远了,先实现简单的资金池，在一点一点完善吧
+    def __init__(self):
+        self.symbol_id_dic = {} # 把这个改为dic，直接装牛总写的那个buy_dic里的对象，当前资金池内得有关标的代码， dic<symbol_id, TargetInfo()>
+        self.symbol_last_complete_amount_dic = {} # 这个dic对应的是每一次完成订单时所对应的成交额， dic<symbol_id, order.filled_amount>
+        self.sell_increase_rate = 0 # 暂时应该用不上，先理思路
+        self.total_cash = 0 # 被分配到的总金额
+        self.left_cash = 0 # 资金池各自的余额
+        self.get_back_cash = 0 # 卖出标的后，卖出的金额会重新加入到资金池，后面可能只会应用在切换资金池数量上面
+
+        self.is_complete_buy = False # 这个池子是否完成了购买任务,这里要看一下如何来判断(是否可以通过)
+
 
 class BuyMode:
     def __init__(self):
         # 注意每个策略下面只能设定一种对应的买入模式（也就是只有一种可以激活到1）！！
-        self.buy_all = 0 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
-        self.buy_one = 1 # 买一只，并指定对应的价格
+        self.buy_all = 1 # 是否和策略B一样，直接从列表一次性全部买入，使用读出的配置数据就可以动态算出每只票的分配仓位
+        self.buy_one = 0 # 买一只，并指定对应的价格
         self.buy_all_force = 0 # 一定要保证买入所有（对应数量非常大的买入，且有很多高价股，均分值无法覆盖高价股）
 
 class OrderTypeBuy:
@@ -51,11 +76,11 @@ class OrderTypeSell:
 class StrategyInfo:
     def __init__(self):
         # 指定策略对应的模式，策略A就对应A=1，一次只能激活一种策略！！
-        self.A = 1
+        self.A = 0
         self.AC = 0
         self.A1 = 0
         self.AA = 0
-        self.B = 0
+        self.B = 1
         self.B1 = 0
         self.BA = 0
         self.C = 0
@@ -120,6 +145,8 @@ class TargetInfo:
         self.partial_holding = 0 # 记录部成的临时值
         self.fixed_buy_in_base_num = 0 # 强制买入所有目标下使用的变量，记录需要买入的base数量（手，最后需要乘100）
 
+        self.last_sell_complete_amount = 0 # 上一次卖单的成交金额，方便后续资金池回收资金
+
 class MaxMinInfo:
     def __init__(self):
         self.max = -1.0
@@ -161,7 +188,7 @@ def refresh(context):
     context.ids = {}
     load_ids(context)
     context.get_all_buy_price_flag = False
-    context.get_all_sell_price_flag = False
+    context.get_all_sell_price_flag = True # False
 
     # 开始订阅目标，这里就比较麻烦了，无法快速输入
     # 统计买入和卖出的单独数量
@@ -222,6 +249,8 @@ def refresh(context):
     for k in del_keys:
         del context.ids_virtual_sell_target_info_dict[k]
 
+    # print(f"del_keys len:{len(del_keys)}")
+
     # ------看是否需要重新统计卖出票的总市值（注意是卖出票，不含买入）
     # 即便设置不是-1，我们也应该检查一次（我之前就误操作，前一天下午开过脚本，忘记重置-1，结果load的都是昨天的sell，导致今天的脚本完全无法正常运行）
     if context.calculate_total_market_value_flag:
@@ -231,7 +260,6 @@ def refresh(context):
             amount = (pos.available_now * pos.vwap) if pos else 0
             context.total_market_value_for_all_sell += amount
         
-        print(f"second time in total mv pt0, mv[{context.total_market_value_for_all_sell}]")
         if context.total_market_value_for_all_sell > 0:
             over_write_mv(context.total_market_value_for_all_sell)
             save_sell_position_info_with_init(context)
@@ -244,8 +272,7 @@ def refresh(context):
     #         amount = (pos.available_now * pos.vwap) if pos else 0
     #         tmp_total_market_value_for_all_sell += amount
 
-    #     print(f"second time in total mv pt1, mv[{context.total_market_value_for_all_sell}] mv2[{tmp_total_market_value_for_all_sell}]")
-    #     if tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell:
+    #     if (tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell) and (tmp_total_market_value_for_all_sell > 0):
     #         context.total_market_value_for_all_sell = tmp_total_market_value_for_all_sell
     #         over_write_mv(context.total_market_value_for_all_sell)
     #         save_sell_position_info_with_init(context)
@@ -708,6 +735,99 @@ def on_parameter(context, parameter):
         log("重新载入ids，重新订阅！")
         refresh(context)
 
+# 初始化资金池
+def init_cash_pool_method(context):
+    leftCash = context.account().cash['available'] # 余额
+    leftCash = float('%.2f' % leftCash)
+    totalCash = context.account().cash['nav'] # 总资金
+    totalCash = float('%.2f' % totalCash)
+    print(f'当前总市值：{totalCash} 资金余额：{leftCash}')
+
+    temp_total_cash = totalCash
+    temp_left_cash = leftCash
+
+    temp_cash_poll_count = context.account_system_info.cash_pool_count
+    # 计算每个资金池的资金
+    avgPoolCash = temp_total_cash / temp_cash_poll_count
+    # 这里需要先判断一下是否有所持股，暂时通过余额来判断
+    # 有一种情况有点特殊，就是有些时候会送股(这里先暂时不考虑这点)，先尝试把大体弄出来试试
+    # 这里还有一种情况，就是头一天分为的是2个资金池，当日可能会改为3个资金池该怎么办，也暂时不考虑，否则就越来越乱了
+    # 创建并分配资金池
+    for cash_index in range(temp_cash_poll_count):
+        temp_cash_pool = CashPoolInfo()
+        # 需要通过总资金以及资金余额来判断每个资金池分的余额资金
+        temp_cash_pool.total_cash = avgPoolCash
+        # 当余额小于平均资金的时候，就将余额直接赋予资金池里的余额
+        # 这个应该只会发生在最后一个资金池
+        # 当昨日的资金池开始sell的时候，释放出来的余额加入到最后一个没有填满余额且没有买入标的资金池
+        # 这里逻辑还不够完整！！必须补全逻辑！！不然后面绝对会出问题！！！！！！
+        # 已经补全，但是需要多测试才行！！！！
+        if temp_left_cash < avgPoolCash:  # leftCash -- temp_left_cash
+            temp_cash_pool.left_cash = temp_left_cash
+            # 初始化时，当整个账号内的余额小于平均资金时，将此余额赋予第一个资金池，并且归为0
+            # 这样的话，就代表不管目前分配到第几个资金池，整个账号中的余额已经分配完了，需要在后面的sell中
+            # 在后面sell的流程里面，当sell成功后，将释放的资金回收进资金池
+            temp_cash_pool.get_back_cash = temp_left_cash
+            temp_left_cash = 0
+        else:
+            temp_cash_pool.left_cash = avgPoolCash
+            temp_left_cash -= avgPoolCash
+            # 如果正常分配，回收资金就应和余额以及资金池的总资金一样，方便后面sell流程里回收资金好判断
+            temp_cash_pool.get_back_cash = avgPoolCash
+        context.account_system_info.cash_pool_dic[cash_index] = temp_cash_pool
+
+    # for key, value in context.account_system_info.cash_pool_dic.items():
+    #     print(f"total cash:{value.total_cash}")
+    #     print(f"left cash:{value.left_cash}")
+
+    # context.ids_buy_target_info_dict[k] = TargetInfo()
+    # for key, value in context.ids_buy_target_info_dict.items():
+    #     print(f"{key}|{value}")
+
+
+    # 测试保存与读取文件--------
+    # test_symbol_arr_1 = ["aaa", "bbb"]
+    # test_symbol_arr_2 = ["ccc", "ddd"]
+
+    # # test_symbol_arr_1 = []
+    # # test_symbol_arr_2 = []
+
+    # context.account_system_info.cash_pool_dic[0].symbol_id_arr = test_symbol_arr_1
+    # context.account_system_info.cash_pool_dic[0].total_cash = 11111
+    # context.account_system_info.cash_pool_dic[0].left_cash = 22222
+
+    # context.account_system_info.cash_pool_dic[1].symbol_id_arr = test_symbol_arr_2
+    # context.account_system_info.cash_pool_dic[1].total_cash = 33333
+    # context.account_system_info.cash_pool_dic[1].left_cash = 44444
+
+    # # for key, value in context.account_system_info.cash_pool_dic.items():
+    # #     value.symbol_id_arr = test_symbol_arr_1
+
+    # save_cash_pool_info_file(context)
+    # load_cash_pool_info_file(context)
+
+    #-------------------------
+
+# 保存资金池到.npy文件
+def save_cash_pool_info_file(context):
+    # context.cash_pool_info_path
+    np.save(cash_pool_info_path, context.account_system_info.cash_pool_dic)
+
+# 读取资金池.npy文件
+def load_cash_pool_info_file(context):
+    temp_yesterday_cash_pool_dic = np.load(cash_pool_info_path, allow_pickle=True)
+    temp_yesterday_cash_pool_dic = dict(temp_yesterday_cash_pool_dic.tolist())
+
+    # 直接在这里判断，昨日的资金池是否有买入标的
+    # 尝试通过对象里的symbol_ids_arr来判断，这样可能会方便后续的相关判断
+    context.account_system_info.yesterday_cash_pool_dic = temp_yesterday_cash_pool_dic
+
+    for key, value in context.account_system_info.yesterday_cash_pool_dic.items():
+        print(f"total cash:{value.total_cash}")
+        print(f"left cash:{value.left_cash}")
+
+    print(f"load yesterday cash pool success :{len(temp_yesterday_cash_pool_dic)}")
+
 
 # 策略中必须有init方法
 def init(context):
@@ -721,6 +841,7 @@ def init(context):
     # 初始化一些全局用变量--------
     # 保存策略信息以及买入方式到全局变量中
     context.strategy_info = StrategyInfo()
+    context.account_system_info = AccountSystemInfo()
 
     log("\n\n\n\n\n\n\n\n策略脚本初始化开始--------")
     context.test_info = 0
@@ -815,8 +936,10 @@ def init(context):
     context.ids_buy_target_info_dict = {}
 
     # 手动产生buy_info的初始文件
-    # save_buy_info(context)
+    save_buy_info(context)
+
     # 初始化动态加载的id文件--------
+    # context.ids这个东西是在这个函数里面初始化的
     load_ids(context)
 
     # 初始化动态参数--------
@@ -831,14 +954,14 @@ def init(context):
     context.Use_Close = 1
     add_parameter(key='Use_Close', value=context.Use_Close, min=0, max=1, name='是否使用昨收', intro='', group='1', readonly=False)
     # 卖出参数
-    context.Sell_Increase_Rate = 1000.2 # 设置上限为不可能达到的值，防止自动达标卖出
+    context.Sell_Increase_Rate = 0.2
     if context.strategy_info.B == 1:
         context.Sell_Increase_Rate = 0.07
     elif context.strategy_info.BA == 1:
         context.Sell_Increase_Rate = 0.07
     add_parameter(key='Sell_Increase_Rate', value=context.Sell_Increase_Rate, min=-1, max=1, name='卖出时涨幅比例', intro='', group='2', readonly=False)
 
-    context.Sell_Loss_Limit = -1000.2
+    context.Sell_Loss_Limit = -0.2
     if context.strategy_info.B == 1:
         context.Sell_Loss_Limit = -0.035
     elif context.strategy_info.BA == 1:
@@ -847,18 +970,19 @@ def init(context):
         context.Sell_Loss_Limit = -0.065
     add_parameter(key='Sell_Loss_Limit', value=context.Sell_Loss_Limit, min=-1, max=1, name='止损比例', intro='', group='2', readonly=False)
 
-    context.Sell_All_Increase_Rate = 1000.2
+    context.Sell_All_Increase_Rate = 0.2
     context.sell_all_chase_raise_flag = False
     context.sell_all_chase_highest_record = -1.0
-    context.sell_all_lower_limit = 0.0066
+    context.default_sell_all_increase_rate = 0.007
+    context.sell_all_lower_limit = context.default_sell_all_increase_rate
     if context.strategy_info.B == 1:
-        context.Sell_All_Increase_Rate = 0.0066
+        context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
     elif context.strategy_info.BA == 1:
         context.Sell_All_Increase_Rate = 0.0045
-    # elif context.strategy_info.A == 1:
-    #     context.Sell_All_Increase_Rate = 0.0113
+    elif context.strategy_info.A == 1:
+        context.Sell_All_Increase_Rate = 0.0113
         
-    context.Sell_All_Loss_Rate = -1000.2
+    context.Sell_All_Loss_Rate = -0.2
     if context.strategy_info.B == 1:
         context.Sell_All_Loss_Rate = -0.016
     elif context.strategy_info.BA == 1:
@@ -876,6 +1000,10 @@ def init(context):
     handled_num = 0 # 用于显示处理进度
     context.ids_buy = []
     context.ids_sell = []
+
+    # 初始化资金池
+    init_cash_pool_method(context)
+
     for k, v in context.ids.items():
         if (v.buy_flag == 1):
             context.ids_buy_target_info_dict[k] = TargetInfo()
@@ -903,6 +1031,21 @@ def init(context):
             if not suspended:
                 buy_num += 1
                 context.ids_buy.append(k)
+                # 在初始化的时候，这里进行的买入标的筛选，就从这里把标的加入资金池中
+                # 通过资金池的总额度和剩余额度的匹配度，来将标的加入到该资金池
+                # 目前的逻辑来说，应该是直接就用资金dic中的第一个池子，目前总感觉有点怪，先接着往下写再说吧！
+                # 这里回头记得去把上面的refresh函数里的也改了，跟这里一样！！！
+                for pool_key, pool_value in context.account_system_info.cash_pool_dic.items():
+                    # 先这样判断，后面再想想有没有更好的判断方法
+                    # 这里不能这样写，因为进不来!!
+                    # 直接分配给第一个资金池，也就是下标为0的资金池。上面初始化时，资源都是优先给到最前面的资金池，试试
+                    # if pool_value.total_cash == pool_value.left_cash:
+                    #     pool_value.symbol_id_dic[k] = context.ids_buy_target_info_dict[k]
+                    #     break
+                    pool_value.symbol_id_dic[k] = context.ids_buy_target_info_dict[k]
+                    pool_value.symbol_last_complete_amount_dic[k] = 0
+                    break
+
             else:
                 del context.ids_buy_target_info_dict[k]
         else:
@@ -926,7 +1069,6 @@ def init(context):
     for k in del_keys:
         del context.ids_virtual_sell_target_info_dict[k]
 
-    print(f"init before calc total mv, [{context.calculate_total_market_value_flag}]")
     # ------看是否需要重新统计卖出票的总市值（注意是卖出票，不含买入）
     # 即便设置不是-1，我们也应该检查一次（我之前就误操作，前一天下午开过脚本，忘记重置-1，结果load的都是昨天的sell，导致今天的脚本完全无法正常运行）
     if context.calculate_total_market_value_flag:
@@ -936,7 +1078,6 @@ def init(context):
             amount = (pos.available_now * pos.vwap) if pos else 0
             context.total_market_value_for_all_sell += amount
         
-        print(f"first time in total mv pt0, mv[{context.total_market_value_for_all_sell}]")
         if context.total_market_value_for_all_sell > 0:
             over_write_mv(context.total_market_value_for_all_sell)
             save_sell_position_info_with_init(context)
@@ -949,8 +1090,7 @@ def init(context):
     #         amount = (pos.available_now * pos.vwap) if pos else 0
     #         tmp_total_market_value_for_all_sell += amount
 
-    #     print(f"first time in total mv pt1, mv[{context.total_market_value_for_all_sell}] mv2[{tmp_total_market_value_for_all_sell}]")
-    #     if tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell:
+    #     if (tmp_total_market_value_for_all_sell != context.total_market_value_for_all_sell) and (tmp_total_market_value_for_all_sell > 0):
     #         context.total_market_value_for_all_sell = tmp_total_market_value_for_all_sell
     #         over_write_mv(context.total_market_value_for_all_sell)
     #         save_sell_position_info_with_init(context)
@@ -965,7 +1105,7 @@ def init(context):
             pos = context.account().position(symbol = symb, side = OrderSide_Buy)
             update_buy_info(context, symb, pos.vwap)
 
-
+    
     # --------订阅接口
     # 频率, 支持 ‘tick’, ‘60s’, ‘300s’, ‘900s’ 等, 默认’1d’
     # 60s以上都是走on_bar，只有tick走的on_tick，一般来说交易肯定是要走tick的
@@ -978,13 +1118,16 @@ def init(context):
     # 查询所有A股代码，暂时用不到，记录在这里
     #id_list = get_instruments(exchanges='SZSE,SHSE', sec_types=1, fields='symbol',df=1)['symbol'].tolist()
     #print(f"A股总数量：{len(id_list)}")
-
     print(context.now)
     #history_data = history(symbol='SHSE.600021', frequency='1d', start_time='2023-05-16',  end_time=datetime.datetime.now().strftime('%Y-%m-%d'), fields='symbol, open, close, low, high, amount', adjust=ADJUST_PREV, df= True)
     #print(history_data)
     #print(history_data.symbol[0])
     #print(history_data.amount)
     
+    # 由于加入资金池的概念的，这里也尝试改下
+    # 但这里改了好像对后面的并不起什么作用，这里仿佛只是一个输出统计的作用
+    # 先改改看，捋捋思路    context.account_system_info.cash_pool_count
+    # 先判断一下是否有持股
     leftCash = context.account().cash['available'] # 余额
     leftCash = float('%.2f' % leftCash)
     totalCash = context.account().cash['nav'] # 总资金
@@ -1007,6 +1150,16 @@ def init(context):
     msg += f"\n资产总值:{totalCash} 目前已持仓种类数量:{curHoldTypeNum} 剩余现金:{leftCash}元 每股均分金额:{avgBuyAmount}元"
     log(msg)    
 
+    # 初始化资金池
+    # 初始化资金池可能需要放在上面的筛选购买标的之前才行
+    # init_cash_pool_method(context, totalCash, leftCash)   log(msg)
+    for pool_key, pool_value in context.account_system_info.cash_pool_dic.items():
+        pool_cash_msg = f""
+        pool_cash_msg += f"资金池:{pool_key} 待买入标的数量:{len(pool_value.symbol_id_dic)} 分配所得总资金:{pool_value.total_cash}"
+        pool_cash_msg += f"\n余额:{pool_value.left_cash} 已回收资金:{pool_value.get_back_cash}"
+        print(f"{pool_cash_msg}")
+        log(pool_cash_msg)
+
     # --------init中的测试函数，如果是循环执行的，应该加入到tick或者bar中
     
     '''
@@ -1027,12 +1180,13 @@ def reach_time(context, target_time):
 
     return (now >= target_time)
 
+
 def check_multi_up_flag(context, tick, rate, buy_in_up_rate):
     # 检测多次上涨后买入相关逻辑
     # 逻辑略微有点复杂，我们的多次上涨检测，需要检测是否超过目标值，超过的话，则计数count+=1
     # 且反转检测标记，开始检测是否低于目标值，低于以后，再次反转，准备检测下一次超过目标值，然后计数继续加1
     multi_up_buy_complete = True # 默认为已完成，在下列流程中修改（流程不开启的话，也是默认完成）
-
+    
     if context.ids[tick.symbol].enable_multi_up_buy_flag:
         # 次数不等，就还需要进一步检测
         # 暂时用不到总次数了，注释记录一下，不过后面可能会用
@@ -1214,7 +1368,6 @@ def check_buy_all_force_flag(context):
 
 
 def try_buy_strategyA(context, tick):
-
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
         #print(f'{tick.symbol}订单没有处理完毕，直接返回')
@@ -1744,7 +1897,6 @@ def try_sell_strategyA(context, tick):
 
 
 def try_buy_strategyB(context, tick):
-
     # 如果client order还没有处理完，也返回
     if tick.symbol in context.client_order.keys():
         #print(f'{tick.symbol}订单没有处理完毕，直接返回')
@@ -1792,15 +1944,40 @@ def try_buy_strategyB(context, tick):
     if (context.ids[tick.symbol].buy_with_num_need_handle) and (context.ids[tick.symbol].buy_with_num_handled_flag):
         return
     
-    leftCash = context.account().cash['available'] # 余额
-    leftCash = float('%.2f' % leftCash)
-    totalCash = context.account().cash['nav'] # 总资金
-    totalCash = float('%.2f' % totalCash)
+    # 总资金这里，现在由于需要分资金池来购买策略，这里会有所改动
+    # 由于这里内容较多，逻辑较为复杂，需要一步一步的进行尝试
+    # 这里将改为获取资金池里的数据
+
+    #---------------
+    # leftCash = context.account().cash['available'] # 余额
+    # leftCash = float('%.2f' % leftCash)
     
+    # totalCash = context.account().cash['nav']
+    # totalCash = float('%.2f' % totalCash)
+    #---------------
+
+    # 后面可能会出现3个或者3个以上的资金池，直接一次写到位，通过标的代码判断是哪个资金池里的
+    # 再将余额和总资金重新赋值
+    # 先找到该标的所在的资金池
+    temp_cash_pool = None
+    for pool_key, pool_value in context.account_system_info.cash_pool_dic.items():
+        if tick.symbol in pool_value.symbol_id_dic.keys():
+            temp_cash_pool = pool_value
+            break
+    
+    if temp_cash_pool == None:
+        print(f"has no choice cash pool!!!")
+        return
+
+    leftCash = float('%.2f' % temp_cash_pool.left_cash)
+    totalCash = float('%.2f' % temp_cash_pool.total_cash)
+
+    # print(f"totalCash:{totalCash}|leftCash:{leftCash}")
     avgBuyAmount = 0
     limitBuyAmountFlag = False # 某些情况需要限制买入数量，比如设定了买入量的话，我们在下面就不要去加1的BaseNum了，不然会多用钱
     if context.strategy_info.buy_mode.buy_all == 1:
         avgBuyAmount = totalCash / totalBuyNum
+        # print(f"avgBuyAmount:{avgBuyAmount}")
     elif context.strategy_info.buy_mode.buy_one == 1:
         avgBuyAmount = context.ids[tick.symbol].buy_amount
         limitBuyAmountFlag = True
@@ -1810,6 +1987,9 @@ def try_buy_strategyB(context, tick):
             return
         avgBuyAmount = context.ids_buy_target_info_dict[tick.symbol].fixed_buy_in_base_num * 100.0 * tick.price
 
+    # 测试
+    # return
+    # 测试
 
     # 持仓大于0，就不买入了，我们用的是今日买入量volume_today，不会出现判断问题，今天买过就不买了
     # 【MAYBE TODO】这里可能有待改进？？？因为会不会出现部成的情况，剩下的委托被我撤销？？需要观察
@@ -1818,6 +1998,7 @@ def try_buy_strategyB(context, tick):
     buy_enough_flag = False
     vwap = 0.0 if (not pos) else pos.vwap
     left_space = avgBuyAmount - (vwap * curHolding)
+    # print(f"left_space:{left_space}|percent:{left_space / (tick.price * 100.0)}")
     if ((left_space >= 0) and (left_space / (tick.price * 100.0) < 0.1)) or (left_space < 0):
         buy_enough_flag = True
     if (curHolding > 0) and (buy_enough_flag) and (context.ids[tick.symbol].buy_with_num == 0):
@@ -1967,8 +2148,20 @@ def try_buy_strategyB(context, tick):
         # 计算应该买入的数量：需要结合总股以及现金余额数进行处理（总股数需要手动设置正确）
         #print(f"tmp test...amount{shouldBuyAmout} val5{curVal5}")
         buyNum = shouldBuyAmout / curVal5
+        # 发现如果末尾有的数量的话，它会向上取整，例如预估1021数量，买入过程就会变为1100数量
+        # 暂时尝试将末尾抹零试试，看看最后购买完的总金额还会不会超，会超多少
+        # 注意下面几行，还有相关操作，先改这里，然后再看看效果
         buyNum = math.floor(buyNum)
+
+        temp_buyNum = 0
+        if buyNum % 100 != 0 and len(str(buyNum)) > 2:
+            # 这里只需要取最后两位，归为0
+            temp_buyNum = (buyNum // 100) * 100
+            log(f"末尾抹零前 {buyNum} 后 {temp_buyNum}")
+            buyNum = temp_buyNum
+
         msg = f"原始买入预估数量：{buyNum}"
+
         log(msg)
         
         # 考虑特殊情况，买不起1手的话（均分价格下），需要具体分析情况
@@ -2034,10 +2227,11 @@ def try_sell_strategyB(context, tick):
         #print(f'{tick.symbol} cur holding: 0')
     else:
         curHolding = pos.available_now
-        # print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
+        print(f"{tick.symbol} 今持：{curHolding} 总持：{pos.volume} 可用：{pos.available_now}")
 
     # 更新vwap或者记录的买入价格到缓存，便于统计数据
     buy_price = pos.vwap
+    print(f"buy_price:{buy_price}")
     # 下面的代码段有非常大的bug，本来是为了解决连续买入卖出时的成本不一致问题
     # 但是有个问题，就是这个更新的vwap，在我们卖出后，今天可能再次买入，买入的价格就更新了。。。。，但是实际我们统计的时候应该用上次记录的，这里完全就冲突了
     # 最后还会导致今日的统计值不正常，想清楚之前先不要使用这个了
@@ -2054,6 +2248,7 @@ def try_sell_strategyB(context, tick):
 
     # 这个在集合竞价的阶段最新价都是0，都是亏损100%。。。。，需要处理这个细节，技术支持建议用这个
     float_profit_rate = (tick.price - buy_price) / buy_price 
+    print(f"float_profit_rate:{float_profit_rate}")
     context.ids_virtual_sell_target_info_dict[tick.symbol].fpr = float_profit_rate;
     # 使用这种方法计算涨幅，就不会遇到集合竞价时tick.price=0的情况，但是两种算法有点差异，技术建议是用上面
     #float_profit_rate = pos.fpnl / pos.amount 
@@ -2261,6 +2456,7 @@ def try_sell_strategyB(context, tick):
             curHolding = int(context.ids[tick.symbol].sell_with_num)
             # 将读取的卖出数量重置到0，否则会连续卖出，这样的话，除非再次刷新（且配置仍然存在），才会继续卖出
             context.ids[tick.symbol].sell_with_num = 0
+        print(f"with_num:{context.ids[tick.symbol].sell_with_num}|with_price:{context.ids[tick.symbol].sell_with_price}")
         if context.ids[tick.symbol].sell_with_price != 0:
             list_order = order_volume(symbol=tick.symbol, volume=curHolding, side=OrderSide_Sell, order_type=OrderType_Limit, position_effect=PositionEffect_Close, price=context.ids[tick.symbol].sell_with_price)
         else:
@@ -2970,6 +3166,8 @@ def info_statistics(context, tick):
     # 现在策略AB不能公用一套整体盈利的计算了，B这边要简单一些，就是用目前的总市值除记录的持仓市值就可以
     # B不存在今天没有卖掉的，不用分块考虑，即便有，占比也可以忽略，A的话就不行了，还要考虑去掉今天买入的部分
     # 版本1统计：不含止损止盈
+    # ！！注意！！目前发现每日15点30后出的txt最低数据和[止]最低数据为-100%，当cur_market_value为0时应该才会出现-100%的情况
+    # 看一下cur_market_value这个值，再向日志输出一下这个值
     total_float_profit_rate = ((cur_market_value - context.total_market_value_for_all_sell) / context.total_market_value_for_all_sell) if context.total_market_value_for_all_sell != 0 else 0
     context.statistics.cur_fpr = total_float_profit_rate
     if valid_tfpr_flag and (total_float_profit_rate > context.statistics.highest_total_fpr):
@@ -3026,13 +3224,13 @@ def info_statistics(context, tick):
         # 一般情况，除开特殊情况外，值都应该保持在正常范围（后期根据数据再继续改进）
         else:
             if context.strategy_info.B == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
             elif context.strategy_info.BA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
             elif context.strategy_info.AA == 1:
-                context.Sell_All_Increase_Rate = 0.0066
+                context.Sell_All_Increase_Rate = context.default_sell_all_increase_rate
                 context.sell_all_chase_raise_flag = False
 
     now = datetime.datetime.strptime(str(context.now.date()) + str(context.now.hour) + ":" + str(context.now.minute), '%Y-%m-%d%H:%M')
@@ -3100,7 +3298,7 @@ def info_statistics(context, tick):
 
         market_value = context.account().cash['market_value'] # 市值，因为之前好像出现了统计错误，这里记录下收盘后的市值，有需要可以核算
         log(f"收盘后的持仓市值为：{market_value}")
-
+        
         # 3点的时候重置整个sell相关的信息，主要是配置文件中的mv改到-1，这个核心值可以控制整个卖出流程
         context.total_market_value_for_all_sell = 0 # 只记录一次就ok
         over_write_mv(-1) # 这里重置为0问题不大，因为市值一般都是两位小数的float，比如1234.68，目前感觉是不会替换到有效id数据的
@@ -3108,6 +3306,10 @@ def info_statistics(context, tick):
         auto_generate_sell_list_with_ids_file(context)
 
 def on_tick(context, tick):
+    # 测试
+    # return
+    # 测试
+
     context.tick_count_for_statistics += 1
     if context.test_info == 1:
         print(f'---------on_tick({tick.symbol})---------')
@@ -3151,6 +3353,7 @@ def on_tick(context, tick):
         for k,v in context.ids_buy_target_info_dict.items():
             if v.price == 0:
                 record_all = False
+                # print(f"false symb{k}")
                 break
         if record_all:
             context.get_all_buy_price_flag = True
@@ -3167,6 +3370,7 @@ def on_tick(context, tick):
                 break
         if record_all:
             context.get_all_sell_price_flag = True
+            log(f"注意！注意！context.get_all_sell_price_flag:{context.get_all_sell_price_flag}")
 
     # 检测tick_count_for_statistics是否在收盘后出现了，次数累加不够的情况？？
     if (context.test_info) == 6:
@@ -3218,6 +3422,7 @@ def on_tick(context, tick):
 
     # 根据不同策略尝试买卖--------
     # 策略A（存在滚动买入和卖出，以及买入和卖出的单独条件设置）
+    # print(f"{context.strategy_info.B}|{context.strategy_info.BA == 1}|{context.strategy_info.AA == 1}")
     if (context.strategy_info.A == 1) or (context.strategy_info.A1 == 1):
         if (context.ids[tick.symbol].buy_flag == 1) and (context.get_all_buy_price_flag):            
             try_buy_strategyA(context, tick)
@@ -3225,6 +3430,7 @@ def on_tick(context, tick):
             try_sell_strategyA(context, tick)
     # 策略B（对冲整体买卖策略，不存在单只处理）
     elif (context.strategy_info.B == 1) or (context.strategy_info.BA == 1) or (context.strategy_info.AA == 1):
+        # print(f"{context.ids[tick.symbol].buy_flag}|{context.get_all_buy_price_flag}")
         if (context.ids[tick.symbol].buy_flag == 1) and (context.get_all_buy_price_flag):
             try_buy_strategyB(context, tick)
         if (context.ids[tick.symbol].buy_flag == 0) and (context.get_all_sell_price_flag):
@@ -3298,11 +3504,116 @@ OrderStatus_Rejected = 8              # 已拒绝
 OrderStatus_Suspended = 9             # 挂起 （无效）
 OrderStatus_PendingNew = 10           # 待报
 OrderStatus_Expired = 12              # 已过期
+OrderSide_Unknown = 0
+OrderSide_Buy = 1             # 买入
+OrderSide_Sell = 2            # 卖出
 '''
+
+# 当卖单完成时(部分订单，全部订单)，回收释放出来的资金
+def when_sell_get_back_cash(context, order, part_or_all):
+    
+    log(f"!卖出{part_or_all}完成! 开始回收释放出来的资金")
+
+    # 在这里，将释放出来的资金回收进各个资金池
+    # 后面这里回收卖出的资金，应该只会应用到切换资金池中，例如，头天为2个资金池，今天需要3个资金池
+    for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
+
+        temp_pool_total_cash = pool_back_value.total_cash 
+        temp_pool_left_cash = pool_back_value.left_cash
+        temp_pool_back_cash = pool_back_value.get_back_cash
+
+        temp_cash_pool_log = f""
+
+        log(f"!当前回-收准备资金池下标{pool_back_key} 前-余额:{temp_pool_left_cash} 前-已回收资金:{temp_pool_back_cash} 前-系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}")
+
+        # 先判断总资金是否和回收资金匹配
+        # 如果回收资金与该资金池总资金相当，说明该资金池已经回收完毕，跳过，到下一个资金池进行相关操作  temp_pool_back_cash -- temp_pool_total_cash
+        if temp_pool_back_cash >= temp_pool_total_cash:
+            continue
+        # 当回收资金小于总资金的时候
+        elif temp_pool_back_cash < temp_pool_total_cash:
+            # 先判断已回收资金加上即将回收的资金是否大于总资金
+            # 这里在回收资金余额的地方操作，需要和买入资金余额相关部分计算一样
+            current_order_filled_amount = round(order.filled_amount, 3) - context.ids_virtual_sell_target_info_dict[order.symbol].last_sell_complete_amount
+            
+            # 是否还有剩余资金需要回收
+            # 由于这里比较复杂，先保存到system_account里的字段里，后续再看怎么操作吧    --  context.account_system_info.is_has_surplus_getback_cash
+            is_has_surplus_getback_cash = 0
+
+            # 先判断，这里已回收资金与即将回收资金，加起来是否已经大于了该资金池的总资金
+            if (temp_pool_back_cash +  current_order_filled_amount) > temp_pool_total_cash:
+                # 得到这个差值，让它刚好等于总资金，而且！要将剩余的释放出来的资金赋予其他资金池，这里稍微有点复杂了，慢点写！
+                # 这里先直接赋值了，剩下的再说吧！
+                temp_difference_value = temp_pool_total_cash - temp_pool_back_cash
+                # 将这个差值再次给到回收资金与余额里
+                pool_back_value.get_back_cash += temp_difference_value
+                pool_back_value.left_cash += temp_difference_value
+
+                # 暂时将这里剩余的且未回收的资金加进整个系统待回收资金里面，后续再想想办法看怎么把这个加回去
+                is_has_surplus_getback_cash = current_order_filled_amount - temp_difference_value
+                context.account_system_info.is_has_surplus_getback_cash += is_has_surplus_getback_cash
+
+            else:
+                # 如果不是上面情况就直接赋值
+                pool_back_value.get_back_cash +=  current_order_filled_amount
+                pool_back_value.left_cash += current_order_filled_amount
+
+            context.ids_virtual_sell_target_info_dict[order.symbol].last_sell_complete_amount = round(order.filled_amount, 3)
+
+            temp_cash_pool_log += f"!卖出后-{part_or_all}! 当前资金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash}"
+            log(temp_cash_pool_log)
+
+        log(f"!当前回收-完成资金池下标{pool_back_key} 后-余额:{pool_back_value.left_cash} 后-已回收资金:{pool_back_value.get_back_cash} 后-系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}")
+
+    # 这里新增一个，当整个系统回收资金里，还有余额的话，就分配给其他未回收完的资金池
+    if context.account_system_info.is_has_surplus_getback_cash > 0:
+        for pool_back_key, pool_back_value in context.account_system_info.cash_pool_dic.items():
+            temp_pool_total_cash = pool_back_value.total_cash 
+            temp_pool_left_cash = pool_back_value.left_cash
+            temp_pool_back_cash = pool_back_value.get_back_cash
+
+            temp_cash_pool_log = f""
+
+            # 系统回收资金里面的余额
+            temp_system_get_back_cash = context.account_system_info.is_has_surplus_getback_cash
+
+            # 还是和上面相关计算一样
+            if temp_pool_back_cash >= temp_pool_total_cash:
+                continue
+            elif temp_pool_back_cash < temp_pool_total_cash:
+                # 先判断，这里已回收资金与即将回收资金，加起来是否已经大于了该资金池的总资金
+                if (temp_pool_back_cash +  temp_system_get_back_cash) > temp_pool_total_cash:
+                    # 计算多少能够补满当前资金池的回收资金的差值
+                    temp_difference_value = temp_pool_total_cash - temp_pool_back_cash
+                    # 回补回收资金以及余额
+                    pool_back_value.get_back_cash += temp_difference_value
+                    pool_back_value.left_cash += temp_difference_value
+                    # 回补完后，再在系统回收资金中减去已补的资金
+                    context.account_system_info.is_has_surplus_getback_cash -=  temp_difference_value
+            
+                else:
+                    # 如果不是上面情况就直接赋值
+                    pool_back_value.get_back_cash +=  temp_system_get_back_cash
+                    pool_back_value.left_cash += temp_system_get_back_cash
+                    # 系统资金全部回补完后，归零
+                    context.account_system_info.is_has_surplus_getback_cash = 0
+
+            temp_cash_pool_log += f"!从系统回收资金中回补资金池-{part_or_all}! 回补金池下标:{pool_back_key} 资金池余额:{pool_back_value.left_cash} 已回收资金:{pool_back_value.get_back_cash} 系统资金回收池:{context.account_system_info.is_has_surplus_getback_cash}"
+            log(temp_cash_pool_log)
+
+
+
+# 当订单失败的时候(撤单，被拒等等)，将撤销的资金拿回到原本的资金池中
+def when_oder_faild_get_back_cash(context, order, cash_pool):
+    log(f'!订单失败! 失败标的代码:{order.symbol} 回收金额:{order.filled_amount} 资金池余额:{cash_pool.left_cash}')
+    cash_pool.left_cash +=  round(order.filled_amount, 3)
+
 # 处理订单状态变化函数--------
 def on_order_status(context, order):
     #print('--------on_order_status')
     #print(order)
+
+    log(f"进入当前订单状态:{order.status} 买或卖:{order.side}")
 
     name = ""            
     if order.symbol in context.ids_virtual_sell_target_info_dict.keys():
@@ -3310,23 +3621,55 @@ def on_order_status(context, order):
     elif order.symbol in context.ids_buy_target_info_dict.keys():
         name = context.ids_buy_target_info_dict[order.symbol].name
 
+    # 找到该标的所在的资金池
+    # ！！注意！！这里需要注意下，根据目前的逻辑来说的话，如果没有找到资金池，那么这一次的订单一定是卖单而不是买单！！
+    temp_cash_pool = None
+    temp_current_cash_pool_index = -1
+    for pool_key, pool_value in context.account_system_info.cash_pool_dic.items():
+        if order.symbol in pool_value.symbol_id_dic.keys():
+            temp_cash_pool = pool_value
+            temp_current_cash_pool_index = pool_key
+            break
+    # context.account_system_info.cash_pool_dic[temp_current_cash_pool_index]
+    temp_cash_pool_log = f""
+    
 
     if order.ord_rej_reason != 0:
         log(f"{order.symbol}:{name} 委托已被拒绝！具体原因如下：{order.ord_rej_reason_detail}")
         # 被拒绝后，可以消除订单的记录
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
+        # 当为购买order的时候，将被拒后的资金回收进相应的资金池
+        # 先暂时注释掉资金回收
+        if order.side == OrderSide_Buy:
+            # when_oder_faild_get_back_cash(context, order, temp_cash_pool)
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = 0
+        elif order.side == OrderSide_Sell:
+            context.ids_virtual_sell_target_info_dict[order.symbol].last_sell_complete_amount = 0
 
     # 订单全部成交的话（status == 3），可以消除订单记录
     if order.status == OrderStatus_Filled:
         log(f'{order.symbol}:{name} 所有委托订单已成，成交均价为：{round(order.filled_vwap, 3)}，已成量：{order.filled_volume}')
+
+        # 由于观察到会又重复进入的现象，根据逻辑来说第一次进入这里，完结后会消除订单记录了
+        # 所以这里当它没在订单记录里的时候直接尝试返回，观察下看能不能解决重复的问题
+        # 先尝试这样解决试试
+        if order.symbol not in context.client_order.keys():
+            log(f"!注意!重复进入完结订单委托 返回{order.symbol}:{name}")
+            return
+
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
+            log(f"所有订单已完结，消除订单记录{order.symbol}:{name}")
 
         #print(f"-------------------test order side:{order.side}")
         # 更新买卖方向的相关信息
         if order.side == OrderSide_Sell:
             update_sell_position_info(context, order.symbol, True, order.filled_vwap)
+            # 回收资金到相应的资金池 -- all
+            log(f"--------准备进入资金回收阶段-all")
+            when_sell_get_back_cash(context, order, "all")
+
         elif order.side == OrderSide_Buy:
             update_buy_info(context, order.symbol, order.filled_vwap)
             context.ids[order.symbol].already_buy_in_flag = True
@@ -3337,6 +3680,9 @@ def on_order_status(context, order):
 
             # 更新已买入的仓位数量：为了解决pos中取出的仓位小几率刷新不及时的问题
             # 全部成交的情况下，不需要用到partial的值，直接加这里的值就可以
+            # ！！注意！！这里在log日志中发现，会有已经完结的订单，但是再次重复进入到这里的情况
+            # 例如预计买入18000，重复进入这里后就变成36000，但是掘金上显示的依然是18000
+            # 详情可以查看20241129日log日志的358行开始(该日志已经保存)
             context.ids_buy_target_info_dict[order.symbol].total_holding += order.filled_volume
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
@@ -3345,6 +3691,22 @@ def on_order_status(context, order):
             if (context.ids[order.symbol].buy_with_num != 0):
                 context.ids[order.symbol].buy_with_num = 0
                 context.ids[order.symbol].buy_with_num_handled_flag = True
+
+            # 对买入的标的所对应的资金池余额更新
+            temp_cash_pool_log +=(f"!买入后-完结! 完结前资金余额:{temp_cash_pool.left_cash} 成交额:{order.filled_amount}")
+            # temp_cash_pool.left_cash -= order.filled_amount
+
+            temp_cash_pool.left_cash = temp_cash_pool.left_cash - (round(order.filled_amount, 3) - temp_cash_pool.symbol_last_complete_amount_dic[order.symbol])
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = round(order.filled_amount, 3)
+
+            # 在完结订单后，好需要把上次完成金额重置为0
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = 0
+
+            # 这里更新完后，重新将此赋值回去，试试看
+            # context.account_system_info.cash_pool_dic[temp_current_cash_pool_index] = temp_cash_pool
+            
+            temp_cash_pool_log += f"\n!买入后-完结! 当前资金池下标:{temp_current_cash_pool_index} 资金池余额:{temp_cash_pool.left_cash} 已回收资金:{temp_cash_pool.get_back_cash}"
+            log(temp_cash_pool_log)
             
 
     # [MAYBE TODO]订单部分成交的话（status == 2），暂不消除订单记录--------
@@ -3360,6 +3722,33 @@ def on_order_status(context, order):
             # 更新已买入的仓位数量：为了解决pos中取出的仓位小几率刷新不及时的问题
             # 部成的情况下，不能直接记录到总数，我们只需要一直更新（注意这里不是加总）部成值即可，直到撤销订单激活的时候，才加总
             context.ids_buy_target_info_dict[order.symbol].partial_holding = order.filled_volume
+            # 由于在购买函数里，之前是直接获取剩余金额，但是由于现在需要更改为资金池的概念
+            # 所以现在每个对应的资金池里的余额需要在订单完成后实时的减去成交的金额
+            # 根据文档，filled_amount是已成交金额，应该可以不用自己算了，测试一下看看
+            print(f"pool left_cash:{temp_cash_pool.left_cash}|order.filled_amount:{ round(order.filled_amount, 3)}")
+            # ！！！注意！！！注意！！！
+            # 这里不能这样减，这里的已成量，不能理解为此标的总订单量的其中一个订单模块
+            # 这里的订单量就是，此标的总订单中--已经完成的订单量，所以这里要计算余额，需要减去上一次的已成量（或者直接用总金额减去已成交金额，可以试试）
+            # 牛大佬！！找到了！！问题所在！！牛逼！！
+            # 这里还是不能这样减，尝试通过从account中获取余额(但这里用account的话，可能会由于掘金的延迟问题导致问题发生)，再进行相关操作，绕过order.filled_amount这个字段
+            # leftCash = context.account().cash['available'] # 余额
+            # leftCash = float('%.2f' % leftCash)
+            # 想了一下，这里应该是还是尽量避免从account中获取余额，来进行相关余额操作
+            # temp_cash_pool.left_cash = temp_cash_pool.total_cash -  round(order.filled_amount, 3)
+            temp_cash_pool.left_cash = temp_cash_pool.left_cash - (round(order.filled_amount, 3) - temp_cash_pool.symbol_last_complete_amount_dic[order.symbol])
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = round(order.filled_amount, 3)
+
+            # 这里更新完后，重新将此赋值回去，试试看
+            # context.account_system_info.cash_pool_dic[temp_current_cash_pool_index] = temp_cash_pool
+
+            temp_cash_pool_log += f"!买入后-部分! 当前资金池下标:{temp_current_cash_pool_index} 成交金额:{ round(order.filled_amount, 3)} 资金池余额:{temp_cash_pool.left_cash} 已回收资金:{temp_cash_pool.get_back_cash}"
+            log(temp_cash_pool_log)
+
+        elif order.side == OrderSide_Sell:
+            # 回收资金到相应的资金池 -- part
+            log(f"--------准备进入资金回收阶段-part")
+            when_sell_get_back_cash(context, order, "part")
+
 
     # 订单已撤销的话（status == 5），可以消除订单记录
     if order.status == OrderStatus_Canceled:
@@ -3369,15 +3758,45 @@ def on_order_status(context, order):
 
         # 撤销订单的时候，应该把已经完成的partial加总到总持仓里面，并重置partial到0（避免下次撤销时，并没有partial完成的情况下，依然有非0值）
         if (order.side == OrderSide_Buy) and (order.symbol in context.ids_buy_target_info_dict.keys()):
-            context.ids_buy_target_info_dict[order.symbol].total_holding += context.ids_buy_target_info_dict[order.symbol].partial_holding
+            context.ids_buy_target_info_dict[order.symbol].total_holding += context.ids_buy_target_info_dict[order.symbol].partial_holding 
             context.ids_buy_target_info_dict[order.symbol].partial_holding = 0
             log(f"{order.symbol}:{name}目前总持仓更新为：{context.ids_buy_target_info_dict[order.symbol].total_holding}")
+
+            # 当为购买order的时候，将被拒后的资金回收进相应的资金池
+            # 这里订单超时撤销，回收资金有问题
+            # 尝试在超时撤销订单重置余额
+            # 这里撤单后，重置余额有大问题，而且好像不需要回补余额，注释掉在试试
+            # temp_total_holding = context.ids_buy_target_info_dict[order.symbol].total_holding
+            # temp_avg_price = round(order.filled_vwap, 3) 
+            # reset_left_cash = temp_cash_pool.total_cash - temp_total_holding * temp_avg_price
+            # temp_cash_pool.left_cash = reset_left_cash
+            # 这里如果撤单的话，需要将该标的的上一次成交额给重置为0，因为再次提交该标的订单的话，上一次成交额可能会远大于新的订单
+            # 例如：上一次成交订单2200的数量，成交金额10w，那么这一次新订单可能为100的数量，成交额为1w，这样就不对了，所以要重置
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = 0
+
+            temp_cash_pool_log += f"!观察! 撤销订单时候的已成量:{order.filled_volume} 已成交金额:{ round(order.filled_amount, 3)}"
+            temp_cash_pool_log += f"\n!撤销订单! 当前资金池下标:{temp_current_cash_pool_index} 资金池余额:{temp_cash_pool.left_cash} 已回收资金:{temp_cash_pool.get_back_cash}"
+            log(temp_cash_pool_log)
+
+        elif (order.side == OrderSide_Sell) and (order.symbol in context.ids_buy_target_info_dict.keys()):
+            context.ids_virtual_sell_target_info_dict[order.symbol].last_sell_complete_amount = 0
+            log(f"!卖单已撤销!")
 
     # 订单已过期的话（status == 12），可以消除订单记录
     if order.status == OrderStatus_Expired:
         log(f'{order.symbol}:{name} 订单已过期')
         if order.symbol in context.client_order.keys():
             del context.client_order[order.symbol]
+
+        # 当为购买order的时候，将被拒后的资金回收进相应的资金池
+        if order.side == OrderSide_Buy:
+            # when_oder_faild_get_back_cash(context, order, temp_cash_pool)
+            temp_cash_pool.symbol_last_complete_amount_dic[order.symbol] = 0
+            temp_cash_pool_log += f"!订单被拒绝! 当前资金池下标:{temp_current_cash_pool_index} 资金池余额:{temp_cash_pool.left_cash} 已回收资金:{temp_cash_pool.get_back_cash}"
+            log(temp_cash_pool_log)
+        elif order.side == OrderSide_Sell:
+            context.ids_virtual_sell_target_info_dict[order.symbol].last_sell_complete_amount = 0
+            log(f"!卖单已过期!")
 
 # 委托执行回报事件
 # 响应委托被执行事件，委托成交或者撤单拒绝后被触发。
@@ -3401,6 +3820,7 @@ def on_account_status(context, account):
     if (account['status']['error']['code'] != 0):
         log(f"发生账号错误：{account['status']['error']['code']}！！！目前没有任何处理")
 
+
 if __name__ == '__main__':
     '''
         strategy_id策略ID, 由系统生成
@@ -3413,15 +3833,17 @@ if __name__ == '__main__':
         backtest_initial_cash回测初始资金
         backtest_commission_ratio回测佣金比例
         backtest_slippage_ratio回测滑点比例
+        backtest_match_mode市价撮合模式，以下一tick/bar开盘价撮合:0，以当前tick/bar收盘价撮合：1
         '''
-    run(strategy_id='1457c400-f485-11ed-a1a9-005056bc063c',
+    run(strategy_id='ade24255-9fc8-11ef-9f3b-fa163e12d1f6',
         filename='main.py',
-        #mode=MODE_BACKTEST,
-        mode=MODE_LIVE,
+        mode=MODE_BACKTEST,
         token='4f0478a8560615e1a0049e2e2565955620b3ec02',
         backtest_start_time='2020-11-01 08:00:00',
         backtest_end_time='2020-11-10 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=10000000,
         backtest_commission_ratio=0.0001,
-        backtest_slippage_ratio=0.0001)
+        backtest_slippage_ratio=0.0001,
+        backtest_match_mode=1)
+
